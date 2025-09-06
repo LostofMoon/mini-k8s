@@ -1,8 +1,3 @@
-"""
-Mini-K8s Scheduler
-简化版调度器，定期扫描未绑定节点的Pod并分配到可用Node
-使用轮转调度算法确保负载均衡
-"""
 import time
 import requests
 from config import Config

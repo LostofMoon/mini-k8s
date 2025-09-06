@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod3
+  namespace: default
+  labels:
+    app: hello-world
+spec:
+  containers:
+  - name: pod1-container1
+    image: registry.cn-hangzhou.aliyuncs.com/tanjunchen/network-multitool:v1
+    command: ["Wrong Command"]
+    ports:
+    - containerPort: 8080
+      protocol: TCP
+    - containerPort: 8081
+      hostPort: 8081
+      protocol: UDP
+    resources:
+      requests:
+        cpu: 1
+        memory: 134217728
+      limits:
+        cpu: 2
+        memory: 268435456

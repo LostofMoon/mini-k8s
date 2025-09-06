@@ -1,7 +1,6 @@
 import requests
 import sys
 import os
-import yaml
 from uuid import uuid1
 
 from config import Config
@@ -119,13 +118,14 @@ if __name__ == "__main__":
     print("[INFO]Starting Node...")
 
     # 解析命令行参数
+    import yaml
     import argparse
     parser = argparse.ArgumentParser(description="Start Mini-K8s Node.")
-    parser.add_argument("--node-config", type=str, default="./testFile/node-1.yaml", help="YAML config file for the node")
+    parser.add_argument("--config", type=str, default="./testFile/node-1.yaml", help="YAML config file for the node")
     args = parser.parse_args()
 
     # 读取配置文件
-    config_file = args.node_config
+    config_file = args.config
     if not os.path.exists(config_file):
         print(f"[ERROR]Config file not found: {config_file}")
         sys.exit(1)

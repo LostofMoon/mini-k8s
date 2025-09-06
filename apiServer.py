@@ -217,7 +217,7 @@ class ApiServer:
                     "name": pod_name,
                     "status": Config.POD_STATUS_CREATING
                 }
-            }), 200
+            })
             
         except Exception as e:
             print(f"[ERROR]Failed to create pod: {e}")
