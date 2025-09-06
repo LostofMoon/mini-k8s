@@ -14,6 +14,14 @@ class Config:
     # ETCD KEY
     NODE_SPEC_KEY = "/nodes/{node_name}"
 
+    POD_SPEC_KEY = "/pods/{namespace}/{name}"
+    GLOBAL_PODS_KEY = "/global/pods"
+
+    #API Routes
+    POD_SPEC_URL = "/api/v1/namespaces/{namespace}/pods/{name}"
+    PODS_URL = "/api/v1/namespaces/{namespace}/pods"
+    GLOBAL_PODS_URL = "/api/v1/pods"
+
     KAFKA_SERVER = "10.119.15.182:9092"  # server
     # KAFKA_SERVER = "10.180.196.84:9092" # zys
 
@@ -26,6 +34,13 @@ class Config:
     DNS_TOPIC = "api.v1.dns"
     # service controller与kubeproxy交互
     SERVICE_PROXY_TOPIC = "serviceproxy.{name}"
+
+    # -------------------- Pod状态定义 --------------------
+    POD_STATUS_CREATING = "CREATING"
+    POD_STATUS_RUNNING = "RUNNING"
+    POD_STATUS_STOPPED = "STOPPED"
+    POD_STATUS_KILLED = "KILLED"
+    POD_STATUS_FAILED = "FAILED"
 
     # 清除列表
     RESET_PREFIX = []

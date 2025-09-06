@@ -1,9 +1,13 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
+import json
 import platform
 import docker
+from time import time
 
 from config import Config
 from etcd import Etcd
+from node import Node
+from pod import Pod
 
 class ApiServer:
     def __init__(self):
@@ -29,71 +33,286 @@ class ApiServer:
         self.bind()
 
     def bind(self):
-        print("[INFO]ApiServer Bind...")
+        print("[INFO]ApiServer Bind Routes...")
+        
+        # 基础路由
         self.app.route("/", methods=["GET"])(self.index)
-
+        self.app.route("/health", methods=["GET"])(self.health_check)
+        
+        # Node管理路由
         self.app.route(Config.NODE_SPEC_URL_F, methods=["POST"])(self.add_node)
+        self.app.route(Config.NODE_SPEC_URL_F, methods=["GET"])(self.get_node)
+        self.app.route(Config.NODE_SPEC_URL_F, methods=["PUT"])(self.update_node)
+        self.app.route(Config.NODE_SPEC_URL_F, methods=["DELETE"])(self.delete_node)
+        self.app.route("/api/v1/nodes", methods=["GET"])(self.get_all_nodes)
+        
+        # Pod管理路由
+        self.app.route("/api/v1/namespaces/<namespace>/pods", methods=["POST"])(self.create_pod)
+        self.app.route("/api/v1/namespaces/<namespace>/pods/<name>", methods=["GET"])(self.get_pod)
+        self.app.route("/api/v1/namespaces/<namespace>/pods/<name>", methods=["PUT"])(self.update_pod)
+        self.app.route("/api/v1/namespaces/<namespace>/pods/<name>", methods=["DELETE"])(self.delete_pod)
+        self.app.route("/api/v1/namespaces/<namespace>/pods", methods=["GET"])(self.get_pods_in_namespace)
+        self.app.route("/api/v1/pods", methods=["GET"])(self.get_all_pods)
 
     def index(self):
-        return "ApiServer Demo"
+        return jsonify({
+            "message": "Mini-K8s ApiServer",
+            "version": "v1.0",
+            "endpoints": [
+                "/api/v1/nodes",
+                "/api/v1/namespaces/{namespace}/pods",
+                "/api/v1/pods"
+            ]
+        })
+    
+    def health_check(self):
+        return jsonify({"status": "healthy", "timestamp": time()})
 
-    # 注册一个新结点
+    # ==================== Node管理 ====================
+    
     def add_node(self, node_name: str):
-        print(f"[INFO]Add Node: {node_name} && json: {request.json}")
-        node_data_json = request.json
-        # new_node_config = NodeConfig(node_json)
-
-        # self.etcd.put(Config.NODE_SPEC_KEY.format(node_name = node_name), node_data_json)
-
-        # # 如果Node存在且状态为ONLINE
-        # node = self.etcd.get(self.etcd_config.NODE_SPEC_KEY.format(name=node_name))
-        # if node is not None:
-        #     if node.status == NODE_STATUS.OFFLINE:
-        #         print(f'[INFO]Node {node_name} reconnect.')
-        #     else:
-        #         print(f'[ERROR] Node {node_name} already exists and is still online.')
-        #         return json.dumps({'error': 'Node name duplicated'}), 403
-
-        # try:
-        #     # 创建Pod主题（用于kubelet）
-        #     pod_topic = self.kafka_config.POD_TOPIC.format(name=node_name)
-        #     # 创建ServiceProxy主题（用于ServiceProxy）
-        #     serviceproxy_topic = self.kafka_config.SERVICE_PROXY_TOPIC.format(name=node_name)
+        """注册新节点"""
+        print(f"[INFO]Registering Node: {node_name}")
+        
+        try:
+            node_data = request.json
+            if not node_data:
+                return jsonify({"error": "No node data provided"}), 400
             
-        #     # 批量创建主题
-        #     topics_to_create = [
-        #         NewTopic(pod_topic, num_partitions=1, replication_factor=1),
-        #         NewTopic(serviceproxy_topic, num_partitions=1, replication_factor=1)
-        #     ]
+            # 检查节点是否已存在
+            existing_node = self.etcd.get(Config.NODE_SPEC_KEY.format(node_name=node_name))
+            if existing_node:
+                print(f"[WARNING]Node {node_name} already exists, updating...")
             
-        #     fs = self.kafka.create_topics(topics_to_create)
-        #     for topic, f in fs.items():
-        #         f.result()
-        #         print(f"[INFO]Topic '{topic}' created successfully.")
+            # 创建Node实例进行验证
+            try:
+                node = Node(node_data)
+                if node.name != node_name:
+                    return jsonify({"error": "Node name mismatch"}), 400
+            except Exception as e:
+                return jsonify({"error": f"Invalid node configuration: {str(e)}"}), 400
             
-        #     # 发送心跳消息到Pod主题
-        #     self.kafka_producer.produce(
-        #         pod_topic, key="HEARTBEAT", value=json.dumps({}).encode("utf-8")
-        #     )
-        # except KafkaException as e:
-        #     if not e.args[0].code() == 36:  # 忽略"主题已存在"的错误
-        #         raise
+            # 存储到etcd
+            self.etcd.put(Config.NODE_SPEC_KEY.format(node_name=node_name), node_data)
+            
+            print(f"[INFO]Node {node_name} registered successfully")
+            
+            # 返回配置信息给节点
+            return jsonify({
+                "message": f"Node {node_name} registered successfully",
+                "kafka_server": Config.KAFKA_SERVER,
+                "kafka_topic": Config.POD_TOPIC.format(name=node_name),
+                "server_time": time()
+            })
+            
+        except Exception as e:
+            print(f"[ERROR]Failed to register node {node_name}: {e}")
+            return jsonify({"error": str(e)}), 500
+    
+    def get_node(self, node_name: str):
+        """获取节点信息"""
+        try:
+            node_data = self.etcd.get(Config.NODE_SPEC_KEY.format(node_name=node_name))
+            if not node_data:
+                return jsonify({"error": f"Node {node_name} not found"}), 404
+            
+            return jsonify(node_data)
+            
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    
+    def update_node(self, node_name: str):
+        """更新节点信息（心跳）"""
+        try:
+            existing_node = self.etcd.get(Config.NODE_SPEC_KEY.format(node_name=node_name))
+            if not existing_node:
+                return jsonify({"error": f"Node {node_name} not found"}), 404
+            
+            # 更新心跳时间
+            update_data = request.json or {}
+            existing_node.update(update_data)
+            existing_node["lastHeartbeat"] = time()
+            
+            self.etcd.put(Config.NODE_SPEC_KEY.format(node_name=node_name), existing_node)
+            
+            return jsonify({"message": f"Node {node_name} updated", "timestamp": time()})
+            
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    
+    def delete_node(self, node_name: str):
+        """删除节点"""
+        try:
+            existing_node = self.etcd.get(Config.NODE_SPEC_KEY.format(node_name=node_name))
+            if not existing_node:
+                return jsonify({"error": f"Node {node_name} not found"}), 404
+            
+            # TODO: 检查节点上是否有运行的Pod
+            
+            self.etcd.delete(Config.NODE_SPEC_KEY.format(node_name=node_name))
+            
+            return jsonify({"message": f"Node {node_name} deleted"})
+            
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    
+    def get_all_nodes(self):
+        """获取所有节点"""
+        try:
+            nodes_data = self.etcd.get_prefix("/nodes/")
+            nodes = []
+            
+            for node_data in nodes_data:
+                if node_data:  # 过滤空数据
+                    nodes.append(node_data)
+            
+            return jsonify({
+                "nodes": nodes,
+                "count": len(nodes)
+            })
+            
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
-        # # 创建成功，向etcd写入实际状态
-        # new_node_config.kafka_server = self.kafka_config.BOOTSTRAP_SERVER
-        # new_node_config.topic = pod_topic
-        # new_node_config.status = NODE_STATUS.ONLINE
-        # new_node_config.heartbeat_time = time()
-        # self.etcd.put(self.etcd_config.NODE_SPEC_KEY.format(name=node_name), new_node_config)
-
-        # return {
-        #     "kafka_server": self.kafka_config.BOOTSTRAP_SERVER,
-        #     "kafka_topic": pod_topic,
-        #     # "serviceproxy_topic": serviceproxy_topic,
-        # }
-        return {
-            "message": f"Node {node_name} added successfully."
-        }
+    # ==================== Pod管理 ====================
+    
+    def create_pod(self, namespace: str):
+        """创建Pod"""
+        print(f"[INFO]Creating Pod in namespace: {namespace}")
+        
+        try:
+            pod_data = request.json
+            if not pod_data:
+                return jsonify({"error": "No pod data provided"}), 400
+            
+            # 确保namespace一致
+            if "metadata" not in pod_data:
+                pod_data["metadata"] = {}
+            pod_data["metadata"]["namespace"] = namespace
+            
+            # 创建Pod实例进行验证
+            try:
+                pod = Pod(pod_data)
+                pod_name = pod.name
+            except Exception as e:
+                return jsonify({"error": f"Invalid pod configuration: {str(e)}"}), 400
+            
+            # 检查Pod是否已存在
+            existing_pod = self.etcd.get(Config.POD_SPEC_KEY.format(namespace=namespace, name=pod_name))
+            if existing_pod:
+                return jsonify({"error": f"Pod {namespace}/{pod_name} already exists"}), 409
+            
+            # 存储到etcd
+            self.etcd.put(Config.POD_SPEC_KEY.format(namespace=namespace, name=pod_name), pod_data)
+            
+            # 同时存储到全局Pod列表
+            global_pods = self.etcd.get(Config.GLOBAL_PODS_KEY) or []
+            global_pods.append(f"{namespace}/{pod_name}")
+            self.etcd.put(Config.GLOBAL_PODS_KEY, global_pods)
+            
+            print(f"[INFO]Pod {namespace}/{pod_name} created successfully")
+            
+            return jsonify({
+                "message": f"Pod {namespace}/{pod_name} created successfully",
+                "pod": {
+                    "namespace": namespace,
+                    "name": pod_name,
+                    "status": Config.POD_STATUS_CREATING
+                }
+            }), 201
+            
+        except Exception as e:
+            print(f"[ERROR]Failed to create pod: {e}")
+            return jsonify({"error": str(e)}), 500
+    
+    def get_pod(self, namespace: str, name: str):
+        """获取Pod信息"""
+        try:
+            pod_data = self.etcd.get(Config.POD_SPEC_KEY.format(namespace=namespace, name=name))
+            if not pod_data:
+                return jsonify({"error": f"Pod {namespace}/{name} not found"}), 404
+            
+            return jsonify(pod_data)
+            
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    
+    def update_pod(self, namespace: str, name: str):
+        """更新Pod状态"""
+        try:
+            existing_pod = self.etcd.get(Config.POD_SPEC_KEY.format(namespace=namespace, name=name))
+            if not existing_pod:
+                return jsonify({"error": f"Pod {namespace}/{name} not found"}), 404
+            
+            update_data = request.json or {}
+            existing_pod.update(update_data)
+            existing_pod["lastUpdated"] = time()
+            
+            self.etcd.put(Config.POD_SPEC_KEY.format(namespace=namespace, name=name), existing_pod)
+            
+            return jsonify({"message": f"Pod {namespace}/{name} updated"})
+            
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    
+    def delete_pod(self, namespace: str, name: str):
+        """删除Pod"""
+        try:
+            existing_pod = self.etcd.get(Config.POD_SPEC_KEY.format(namespace=namespace, name=name))
+            if not existing_pod:
+                return jsonify({"error": f"Pod {namespace}/{name} not found"}), 404
+            
+            # 从etcd删除
+            self.etcd.delete(Config.POD_SPEC_KEY.format(namespace=namespace, name=name))
+            
+            # 从全局Pod列表删除
+            global_pods = self.etcd.get(Config.GLOBAL_PODS_KEY) or []
+            pod_key = f"{namespace}/{name}"
+            if pod_key in global_pods:
+                global_pods.remove(pod_key)
+                self.etcd.put(Config.GLOBAL_PODS_KEY, global_pods)
+            
+            return jsonify({"message": f"Pod {namespace}/{name} deleted"})
+            
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    
+    def get_pods_in_namespace(self, namespace: str):
+        """获取命名空间下的所有Pod"""
+        try:
+            pods_data = self.etcd.get_prefix(f"/pods/{namespace}/")
+            pods = []
+            
+            for pod_data in pods_data:
+                if pod_data:
+                    pods.append(pod_data)
+            
+            return jsonify({
+                "namespace": namespace,
+                "pods": pods,
+                "count": len(pods)
+            })
+            
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    
+    def get_all_pods(self):
+        """获取所有Pod"""
+        try:
+            pods_data = self.etcd.get_prefix("/pods/")
+            pods = []
+            
+            for pod_data in pods_data:
+                if pod_data:
+                    pods.append(pod_data)
+            
+            return jsonify({
+                "pods": pods,
+                "count": len(pods)
+            })
+            
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
     def run(self):
         print('[INFO] ApiServer Run...')
