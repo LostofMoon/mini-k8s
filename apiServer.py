@@ -53,6 +53,9 @@ class ApiServer:
         self.app.route(Config.POD_SPEC_URL_F, methods=["DELETE"])(self.delete_pod)
         self.app.route(Config.PODS_URL_F, methods=["GET"])(self.get_pods_in_namespace)
         self.app.route(Config.GLOBAL_PODS_URL_F, methods=["GET"])(self.get_all_pods)
+        
+        # Pod状态更新路由（供Kubelet使用）
+        self.app.route(Config.POD_STATUS_URL_F, methods=["PUT"])(self.update_pod_status)
 
     def index(self):
         return jsonify({
@@ -198,12 +201,12 @@ class ApiServer:
                 return jsonify({"error": f"Invalid pod configuration: {str(e)}"}), 400
             
             # 检查Pod是否已存在
-            existing_pod = self.etcd.get(Config.POD_SPEC_KEY.format(namespace=namespace, name=pod_name))
+            existing_pod = self.etcd.get(Config.POD_SPEC_KEY.format(namespace=namespace, pod_name=pod_name))
             if existing_pod:
                 return jsonify({"warning": f"Pod {namespace}/{pod_name} already exists"}), 409
             
             # 存储到etcd
-            self.etcd.put(Config.POD_SPEC_KEY.format(namespace=namespace, name=pod_name), pod_data)
+            self.etcd.put(Config.POD_SPEC_KEY.format(namespace=namespace, pod_name=pod_name), pod_data)
             
             print(f"[INFO]Pod {namespace}/{pod_name} created successfully")
             
@@ -223,7 +226,7 @@ class ApiServer:
     def get_pod(self, namespace: str, name: str):
         """获取Pod信息"""
         try:
-            pod_data = self.etcd.get(Config.POD_SPEC_KEY.format(namespace=namespace, name=name))
+            pod_data = self.etcd.get(Config.POD_SPEC_KEY.format(namespace=namespace, pod_name=name))
             if not pod_data:
                 return jsonify({"error": f"Pod {namespace}/{name} not found"}), 404
             
@@ -235,7 +238,7 @@ class ApiServer:
     def update_pod(self, namespace: str, name: str):
         """更新Pod状态"""
         try:
-            existing_pod = self.etcd.get(Config.POD_SPEC_KEY.format(namespace=namespace, name=name))
+            existing_pod = self.etcd.get(Config.POD_SPEC_KEY.format(namespace=namespace, pod_name=name))
             if not existing_pod:
                 return jsonify({"error": f"Pod {namespace}/{name} not found"}), 404
             
@@ -243,7 +246,7 @@ class ApiServer:
             existing_pod.update(update_data)
             existing_pod["lastUpdated"] = time()
             
-            self.etcd.put(Config.POD_SPEC_KEY.format(namespace=namespace, name=name), existing_pod)
+            self.etcd.put(Config.POD_SPEC_KEY.format(namespace=namespace, pod_name=name), existing_pod)
             
             return jsonify({"message": f"Pod {namespace}/{name} updated"})
             
@@ -253,12 +256,12 @@ class ApiServer:
     def delete_pod(self, namespace: str, name: str):
         """删除Pod"""
         try:
-            existing_pod = self.etcd.get(Config.POD_SPEC_KEY.format(namespace=namespace, name=name))
+            existing_pod = self.etcd.get(Config.POD_SPEC_KEY.format(namespace=namespace, pod_name=name))
             if not existing_pod:
                 return jsonify({"error": f"Pod {namespace}/{name} not found"}), 404
             
             # 从etcd删除
-            self.etcd.delete(Config.POD_SPEC_KEY.format(namespace=namespace, name=name))
+            self.etcd.delete(Config.POD_SPEC_KEY.format(namespace=namespace, pod_name=name))
             
             return jsonify({"message": f"Pod {namespace}/{name} deleted"})
             
@@ -301,6 +304,61 @@ class ApiServer:
             })
             
         except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    def update_pod_status(self, namespace: str, pod_name: str):
+        """更新Pod状态（由Kubelet调用）"""
+        try:
+            pod_key = Config.POD_SPEC_KEY.format(namespace=namespace, pod_name=pod_name)
+            existing_pod = self.etcd.get(pod_key)
+            
+            # 获取状态更新数据
+            status_data = request.json or {}
+            
+            if not existing_pod:
+                # 如果Pod不存在，创建基础Pod信息
+                new_pod = {
+                    "apiVersion": "v1",
+                    "kind": "Pod",
+                    "metadata": {
+                        "name": pod_name,
+                        "namespace": namespace
+                    },
+                    "status": status_data.get("status", "Running"),
+                    "ip": status_data.get("ip", ""),
+                    "node": status_data.get("node", ""),
+                    "containers": status_data.get("containers", 1),
+                    "lastUpdate": time()
+                }
+                
+                self.etcd.put(pod_key, new_pod)
+                
+                return jsonify({
+                    "message": f"Pod {namespace}/{pod_name} status created",
+                    "status": new_pod["status"]
+                })
+            else:
+                # 更新现有Pod状态
+                if "status" in status_data:
+                    existing_pod["status"] = status_data["status"]
+                if "ip" in status_data:
+                    existing_pod["ip"] = status_data["ip"]
+                if "node" in status_data:
+                    existing_pod["node"] = status_data["node"]
+                
+                existing_pod["lastUpdate"] = time()
+                
+                self.etcd.put(pod_key, existing_pod)
+                
+                return jsonify({
+                    "message": f"Pod {namespace}/{pod_name} status updated",
+                    "status": existing_pod.get("status")
+                })
+            
+        except Exception as e:
+            print(f"[ERROR]Failed to update pod status: {e}")
+            import traceback
+            traceback.print_exc()
             return jsonify({"error": str(e)}), 500
 
     def run(self):

@@ -14,7 +14,7 @@ class Config:
     NODE_SPEC_KEY = "/nodes/{node_name}"
 
     GLOBAL_PODS_KEY = "/pods/"
-    POD_SPEC_KEY = "/pods/{namespace}/{name}"
+    POD_SPEC_KEY = "/pods/{namespace}/{pod_name}"
 
 #---------------------------------------------------------------------------------------
 
@@ -31,6 +31,10 @@ class Config:
     PODS_URL = "/api/v1/namespaces/{namespace}/pods"
     GLOBAL_PODS_URL_F = "/api/v1/pods"
     GLOBAL_PODS_URL = "/api/v1/pods"
+    
+    # PODS 状态更新 Routes
+    POD_STATUS_URL_F = "/api/v1/namespaces/<namespace>/pods/<pod_name>/status"
+    POD_STATUS_URL = "/api/v1/namespaces/{namespace}/pods/{pod_name}/status"
 
     KAFKA_SERVER = "10.119.15.182:9092"  # server
     # KAFKA_SERVER = "10.180.196.84:9092" # zys
