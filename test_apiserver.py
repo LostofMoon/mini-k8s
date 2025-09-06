@@ -53,37 +53,44 @@ def test_api_server():
         # 获取Node
         response = requests.get(f"{base_url}/api/v1/nodes/node-01")
         if response.status_code == 200:
+            result = response.json()
             print(f"   ✅ 获取Node成功")
+            print(f"result: {result}\n")
         
         # 获取所有Node
         response = requests.get(f"{base_url}/api/v1/nodes")
         if response.status_code == 200:
             result = response.json()
             print(f"   ✅ 获取所有Node: {result['count']} 个节点")
+            print(f"result: {result}\n")
         
         # 3. 测试Pod API
         print("\n3. 测试Pod API...")
         
         # 读取Pod配置
-        with open("testFile/pod-test.yaml", "r", encoding="utf-8") as f:
+        with open("testFile/pod-1.yaml", "r", encoding="utf-8") as f:
             pod_data = yaml.safe_load(f)
         
         # 创建Pod
         response = requests.post(f"{base_url}/api/v1/namespaces/default/pods", json=pod_data)
-        if response.status_code == 201:
+        if response.status_code == 200:
             result = response.json()
             print(f"   ✅ 创建Pod成功: {result['message']}")
         
         # 获取Pod
         response = requests.get(f"{base_url}/api/v1/namespaces/default/pods/test-pod")
         if response.status_code == 200:
+            result = response.json()
             print(f"   ✅ 获取Pod成功")
+            print(f"result: {result}\n")
+        
         
         # 获取命名空间下的Pod
         response = requests.get(f"{base_url}/api/v1/namespaces/default/pods")
         if response.status_code == 200:
             result = response.json()
             print(f"   ✅ 获取default命名空间Pod: {result['count']} 个")
+            print(f"result: {result}\n")
         
         # 获取所有Pod
         response = requests.get(f"{base_url}/api/v1/pods")

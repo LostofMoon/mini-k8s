@@ -8,14 +8,16 @@ from config import Config
 
 class Node:
     def __init__(self, arg):
-        metadata = arg.get("metadata")
         self.id = str(uuid1())
+
+        metadata = arg.get("metadata")
         self.name = metadata.get("name")
-        self.apiserver = metadata.get("ip")
+        self.apiserver = metadata.get("api-server").get("ip")
 
         spec = arg.get("spec")
         self.subnet_ip = spec.get("podCIDR")
         self.taints = spec.get("taints")
+        
         self.json = arg
 
         # 运行时状态
@@ -64,12 +66,6 @@ class Node:
 
 if __name__ == "__main__":
     print("[INFO]Starting Node...")
-    
-    # # 记录日志文件路径
-    # log_file = os.environ.get('NODE_LOG_FILE')
-    # if log_file:
-    #     print(f"[INFO]Node logs will be written to: {log_file}")
-        
 
     # 解析命令行参数
     import argparse

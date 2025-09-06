@@ -7,19 +7,29 @@ class Config:
     SERVER_PORT = "5050"
     SERVER_URI = f"http://{HOST}:{SERVER_PORT}"
 
-    #Route Config
-    NODE_SPEC_URL_F = "/api/v1/nodes/<node_name>"
-    NODE_SPEC_URL = "/api/v1/nodes/{node_name}"
+#---------------------------------------------------------------------------------------
 
     # ETCD KEY
+    NODES_KEY = "/nodes/"
     NODE_SPEC_KEY = "/nodes/{node_name}"
 
+    GLOBAL_PODS_KEY = "/pods/"
     POD_SPEC_KEY = "/pods/{namespace}/{name}"
-    GLOBAL_PODS_KEY = "/global/pods"
 
-    #API Routes
+#---------------------------------------------------------------------------------------
+
+    # NODES Routes
+    NODE_SPEC_URL_F = "/api/v1/nodes/<node_name>"
+    NODE_SPEC_URL = "/api/v1/nodes/{node_name}"
+    NODE_URL_F = "/api/v1/nodes"
+    NODE_URL = "/api/v1/nodes"
+
+    # PODS Routes
+    POD_SPEC_URL_F = "/api/v1/namespaces/<namespace>/pods/<name>"
     POD_SPEC_URL = "/api/v1/namespaces/{namespace}/pods/{name}"
+    PODS_URL_F = "/api/v1/namespaces/<namespace>/pods"
     PODS_URL = "/api/v1/namespaces/{namespace}/pods"
+    GLOBAL_PODS_URL_F = "/api/v1/pods"
     GLOBAL_PODS_URL = "/api/v1/pods"
 
     KAFKA_SERVER = "10.119.15.182:9092"  # server
@@ -43,5 +53,5 @@ class Config:
     POD_STATUS_FAILED = "FAILED"
 
     # 清除列表
-    RESET_PREFIX = []
+    RESET_PREFIX = [NODES_KEY, GLOBAL_PODS_KEY]
     # RESET_PREFIX = [NODES_KEY, GLOBAL_PODS_KEY, GLOBAL_REPLICA_SETS_KEY, GLOBAL_HPA_KEY, GLOBAL_DNS_KEY, GLOBAL_SERVICES_KEY, GLOBAL_FUNCTION_KEY, GLOBAL_WORKFLOW_KEY]

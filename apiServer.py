@@ -40,28 +40,28 @@ class ApiServer:
         self.app.route("/health", methods=["GET"])(self.health_check)
         
         # Node管理路由
-        self.app.route(Config.NODE_SPEC_URL_F, methods=["POST"])(self.add_node)
+        self.app.route(Config.NODE_SPEC_URL_F, methods=["POST"])(self.create_node)
         self.app.route(Config.NODE_SPEC_URL_F, methods=["GET"])(self.get_node)
         self.app.route(Config.NODE_SPEC_URL_F, methods=["PUT"])(self.update_node)
         self.app.route(Config.NODE_SPEC_URL_F, methods=["DELETE"])(self.delete_node)
-        self.app.route("/api/v1/nodes", methods=["GET"])(self.get_all_nodes)
-        
+        self.app.route(Config.NODE_URL_F, methods=["GET"])(self.get_all_nodes)
+
         # Pod管理路由
-        self.app.route("/api/v1/namespaces/<namespace>/pods", methods=["POST"])(self.create_pod)
-        self.app.route("/api/v1/namespaces/<namespace>/pods/<name>", methods=["GET"])(self.get_pod)
-        self.app.route("/api/v1/namespaces/<namespace>/pods/<name>", methods=["PUT"])(self.update_pod)
-        self.app.route("/api/v1/namespaces/<namespace>/pods/<name>", methods=["DELETE"])(self.delete_pod)
-        self.app.route("/api/v1/namespaces/<namespace>/pods", methods=["GET"])(self.get_pods_in_namespace)
-        self.app.route("/api/v1/pods", methods=["GET"])(self.get_all_pods)
+        self.app.route(Config.POD_SPEC_URL_F, methods=["POST"])(self.create_pod)
+        self.app.route(Config.POD_SPEC_URL_F, methods=["GET"])(self.get_pod)
+        self.app.route(Config.POD_SPEC_URL_F, methods=["PUT"])(self.update_pod)
+        self.app.route(Config.POD_SPEC_URL_F, methods=["DELETE"])(self.delete_pod)
+        self.app.route(Config.PODS_URL_F, methods=["GET"])(self.get_pods_in_namespace)
+        self.app.route(Config.GLOBAL_PODS_URL_F, methods=["GET"])(self.get_all_pods)
 
     def index(self):
         return jsonify({
             "message": "Mini-K8s ApiServer",
             "version": "v1.0",
             "endpoints": [
-                "/api/v1/nodes",
-                "/api/v1/namespaces/{namespace}/pods",
-                "/api/v1/pods"
+                Config.NODE_URL,
+                Config.PODS_URL,
+                Config.GLOBAL_PODS_URL
             ]
         })
     
@@ -70,7 +70,7 @@ class ApiServer:
 
     # ==================== Node管理 ====================
     
-    def add_node(self, node_name: str):
+    def create_node(self, node_name: str):
         """注册新节点"""
         print(f"[INFO]Registering Node: {node_name}")
         
@@ -82,7 +82,7 @@ class ApiServer:
             # 检查节点是否已存在
             existing_node = self.etcd.get(Config.NODE_SPEC_KEY.format(node_name=node_name))
             if existing_node:
-                print(f"[WARNING]Node {node_name} already exists, updating...")
+                return jsonify({"warning": f"Node {node_name} already exists"}), 409
             
             # 创建Node实例进行验证
             try:
@@ -159,7 +159,7 @@ class ApiServer:
     def get_all_nodes(self):
         """获取所有节点"""
         try:
-            nodes_data = self.etcd.get_prefix("/nodes/")
+            nodes_data = self.etcd.get_prefix(Config.NODES_KEY)
             nodes = []
             
             for node_data in nodes_data:
@@ -176,39 +176,34 @@ class ApiServer:
 
     # ==================== Pod管理 ====================
     
-    def create_pod(self, namespace: str):
+    def create_pod(self, namespace: str, name: str):
         """创建Pod"""
-        print(f"[INFO]Creating Pod in namespace: {namespace}")
+        print(f"[INFO]Creating Pod {name} in namespace: {namespace}")
         
         try:
             pod_data = request.json
             if not pod_data:
                 return jsonify({"error": "No pod data provided"}), 400
             
-            # 确保namespace一致
-            if "metadata" not in pod_data:
-                pod_data["metadata"] = {}
-            pod_data["metadata"]["namespace"] = namespace
-            
             # 创建Pod实例进行验证
             try:
                 pod = Pod(pod_data)
                 pod_name = pod.name
+                
+                # 验证URL中的name与配置中的name是否一致
+                if pod_name != name:
+                    return jsonify({"error": f"Pod name in URL ({name}) doesn't match name in config ({pod_name})"}), 400
+                    
             except Exception as e:
                 return jsonify({"error": f"Invalid pod configuration: {str(e)}"}), 400
             
             # 检查Pod是否已存在
             existing_pod = self.etcd.get(Config.POD_SPEC_KEY.format(namespace=namespace, name=pod_name))
             if existing_pod:
-                return jsonify({"error": f"Pod {namespace}/{pod_name} already exists"}), 409
+                return jsonify({"warning": f"Pod {namespace}/{pod_name} already exists"}), 409
             
             # 存储到etcd
             self.etcd.put(Config.POD_SPEC_KEY.format(namespace=namespace, name=pod_name), pod_data)
-            
-            # 同时存储到全局Pod列表
-            global_pods = self.etcd.get(Config.GLOBAL_PODS_KEY) or []
-            global_pods.append(f"{namespace}/{pod_name}")
-            self.etcd.put(Config.GLOBAL_PODS_KEY, global_pods)
             
             print(f"[INFO]Pod {namespace}/{pod_name} created successfully")
             
@@ -219,7 +214,7 @@ class ApiServer:
                     "name": pod_name,
                     "status": Config.POD_STATUS_CREATING
                 }
-            }), 201
+            }), 200
             
         except Exception as e:
             print(f"[ERROR]Failed to create pod: {e}")
@@ -265,13 +260,6 @@ class ApiServer:
             # 从etcd删除
             self.etcd.delete(Config.POD_SPEC_KEY.format(namespace=namespace, name=name))
             
-            # 从全局Pod列表删除
-            global_pods = self.etcd.get(Config.GLOBAL_PODS_KEY) or []
-            pod_key = f"{namespace}/{name}"
-            if pod_key in global_pods:
-                global_pods.remove(pod_key)
-                self.etcd.put(Config.GLOBAL_PODS_KEY, global_pods)
-            
             return jsonify({"message": f"Pod {namespace}/{name} deleted"})
             
         except Exception as e:
@@ -280,7 +268,8 @@ class ApiServer:
     def get_pods_in_namespace(self, namespace: str):
         """获取命名空间下的所有Pod"""
         try:
-            pods_data = self.etcd.get_prefix(f"/pods/{namespace}/")
+            namespace_prefix = f"{Config.GLOBAL_PODS_KEY}{namespace}/"
+            pods_data = self.etcd.get_prefix(namespace_prefix)
             pods = []
             
             for pod_data in pods_data:
@@ -299,7 +288,7 @@ class ApiServer:
     def get_all_pods(self):
         """获取所有Pod"""
         try:
-            pods_data = self.etcd.get_prefix("/pods/")
+            pods_data = self.etcd.get_prefix(Config.GLOBAL_PODS_KEY)
             pods = []
             
             for pod_data in pods_data:

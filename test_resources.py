@@ -31,7 +31,7 @@ def test_node_and_pod():
     
     # 测试Pod
     print("\n2. 测试Pod...")
-    pod_yaml_path = "testFile/pod-test.yaml"
+    pod_yaml_path = "testFile/pod-1.yaml"
     
     if os.path.exists(pod_yaml_path):
         with open(pod_yaml_path, 'r', encoding='utf-8') as f:

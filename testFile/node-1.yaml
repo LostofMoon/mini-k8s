@@ -10,12 +10,14 @@ metadata:
     node-role.kubernetes.io/worker: "true"  # 自定义节点角色标签
   annotations:
     example.com/custom-annotation: "value"  # 自定义注解
+
 spec:
   podCIDR: 10.244.0.0/24  # 节点分配的子网
   taints:  # 污点，用于限制 Pod 调度
     - key: "gpu"
       value: "nvidia"
   unschedulable: false  # 是否禁止调度
+
 status:
   addresses:  # 节点的地址列表
     - type: InternalIP
