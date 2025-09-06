@@ -72,13 +72,13 @@ def test_api_server():
             pod_data = yaml.safe_load(f)
         
         # 创建Pod
-        response = requests.post(f"{base_url}/api/v1/namespaces/default/pods", json=pod_data)
+        response = requests.post(f"{base_url}/api/v1/namespaces/default/pods/pod1", json=pod_data)
         if response.status_code == 200:
             result = response.json()
             print(f"   ✅ 创建Pod成功: {result['message']}")
         
         # 获取Pod
-        response = requests.get(f"{base_url}/api/v1/namespaces/default/pods/test-pod")
+        response = requests.get(f"{base_url}/api/v1/namespaces/default/pods/pod1")
         if response.status_code == 200:
             result = response.json()
             print(f"   ✅ 获取Pod成功")
