@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod2
+  namespace: default
+  labels:
+    app: hello-world
+spec:
+  containers:
+  - name: pod2-container1
+    image: registry.cn-hangzhou.aliyuncs.com/tanjunchen/network-multitool:v1
+    command: ["sh", "-c"]
+    args: ["echo 'Hello, Kubernetes!' && sleep 3600"]
+    ports:
+    - containerPort: 8080
+      protocol: TCP
+    - containerPort: 8081
+      hostPort: 8081
+      protocol: UDP
+    resources:
+      requests:
+        cpu: 1
+        memory: 134217728 #只支持以byte为单位的int，最小6MB
+      limits:
+        cpu: 2
+        memory: 268435456
+    volumeMounts:
+        - name: shared-volume
+          mountPath: /mnt/data
+          readOnly: false
+          subPath: data
+        - name: config-volume
+          mountPath: /etc/config
+          readOnly: true
+  volumes:
+  - name: shared-volume
+    hostPath: #只支持hostPath，不支持configMap、emptydir等
+      path: /host/path/shared
+      type: Directory  #可选：Directory、File、Socket 等
+  - name: config-volume
+    hostPath:
+      path: /host/path/config

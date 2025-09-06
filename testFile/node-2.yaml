@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: Node
+metadata:
+  name: node-02  # 节点的名称
+  api-server:
+    ip: localhost
+    port: 8090
+  labels:
+    kubernetes.io/hostname: node-02  # 节点的主机名标签
+    node-role.kubernetes.io/worker: "true"  # 自定义节点角色标签
+  annotations:
+    example.com/custom-annotation: "value"  # 自定义注解
+spec:
+  podCIDR: 10.244.0.0/24  # 节点分配的子网
+  taints:  # 污点，用于限制 Pod 调度
+    - key: "gpu"
+      value: "nvidia"
+  unschedulable: false  # 是否禁止调度
+status:
+  addresses:  # 节点的地址列表
+    - type: InternalIP
+      address: 192.168.1.100
+    - type: Hostname
+      address: node-02
+  capacity:  # 节点的资源容量
+    cpu: "4"
+    memory: "16Gi"
+    pods: "110"
+  allocatable:  # 节点可分配的资源
+    cpu: "4"
+    memory: "16Gi"
+    pods: "110"
+  conditions:  # 节点的状态条件
+    - type: Ready
+      status: "True"
+      lastHeartbeatTime: "2023-10-01T12:00:00Z"
+      lastTransitionTime: "2023-10-01T12:00:00Z"
+      reason: "KubeletReady"
+      message: "kubelet is posting ready status"
+  nodeInfo:  # 节点的系统信息
+    architecture: amd64
+    kernelVersion: 5.4.0-42-generic
+    osImage: Ubuntu 20.04.1 LTS
+    operatingSystem: linux
+    containerRuntimeVersion: docker://19.3.12
+    kubeletVersion: v1.22.0
+    kubeProxyVersion: v1.22.0
