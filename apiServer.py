@@ -87,8 +87,6 @@ class ApiServer:
             # 返回配置信息给节点
             return jsonify({
                 "message": f"Node {node_name} registered successfully",
-                "kafka_server": Config.KAFKA_SERVER,
-                "kafka_topic": Config.POD_TOPIC.format(name=node_name),
                 "server_time": time()
             })
             

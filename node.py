@@ -1,6 +1,6 @@
 import requests
-import sys
 import os
+import time
 from uuid import uuid1
 
 from config import Config
@@ -17,22 +17,22 @@ class Node:
         if api_server_config and isinstance(api_server_config, dict):
             self.apiserver = api_server_config.get("ip", "localhost")
         else:
-            self.apiserver = "localhost"  # 默认值
-
-        # self.apiserver = metadata.get("api-server").get("ip")
+            self.apiserver = "localhost"
 
         spec = arg.get("spec")
         self.subnet_ip = spec.get("podCIDR")
         self.taints = spec.get("taints")
 
+        # Kafka配置 - 直接使用配置文件中的默认值
+        self.kafka_bootstrap_servers = Config.KAFKA_BOOTSTRAP_SERVERS
+
         self.json = arg
 
         # 运行时状态
-        self.kafka_server = None
-        self.kafka_topic = None
         
-        # 组件引用（暂时为None，后续完善时再启用）
         self.kubelet = None
+
+        # TODO: 组件引用（暂时为None，后续完善时再启用）
         self.service_proxy = None
         
     def kubelet_config_args(self):
@@ -41,6 +41,7 @@ class Node:
             "subnet_ip": self.subnet_ip,
             "apiserver": self.apiserver,
             "node_id": self.id,
+            "kafka_bootstrap_servers": self.kafka_bootstrap_servers
         }
 
     def run(self):
@@ -50,43 +51,37 @@ class Node:
         # 注册到 API Server
         path = Config.NODE_SPEC_URL.format(node_name=self.name)
         url = f"{Config.SERVER_URI}{path}"
-
         session = requests.Session()
         register_response = session.post(url, json=self.json)
 
-        if register_response.status_code != 200:
-            print(f"[ERROR]Cannot register to ApiServer with code {register_response.status_code}")
+        if register_response.status_code == 200:
+            print(f"[INFO]Node {self.name} successfully registered to ApiServer")
+        elif register_response.status_code == 409:
+            print(f"[WARNING]Node {self.name} already exists in ApiServer - continuing with existing registration")
+        else:
+            print(f"[ERROR]Cannot register to ApiServer with code {register_response.status_code}: {register_response.text}")
             return
-            
-        # 获取ApiServer返回的配置信息
-        res_json = register_response.json()
-        self.kafka_server = res_json.get("kafka_server")
-        self.kafka_topic = res_json.get("kafka_topic")
-        
-        print(f"[INFO]Node {self.name} successfully registered to ApiServer")
         
         # 启动组件
-        self._start_kubelet(res_json)
+        self._start_kubelet()
+        
         # TODO: 后续实现
         # self._start_service_proxy()
         
         print(f"[INFO]Node {self.name} is running")
     
-    def _start_kubelet(self, server_config):
+    def _start_kubelet(self):
         """启动Kubelet组件"""
         try:
             from kubelet import Kubelet
             
-            # 构建Kubelet配置
+            # 构建Kubelet配置，创建并启动Kubelet
             kubelet_config = {
-                "node_id": self.name,  # 使用节点名称而不是ID
+                "node_id": self.name,
                 "apiserver": self.apiserver,
                 "subnet_ip": self.subnet_ip,
-                "kafka_server": self.kafka_server,
-                "kafka_topic": self.kafka_topic
+                "kafka_bootstrap_servers": self.kafka_bootstrap_servers
             }
-            
-            # 创建并启动Kubelet
             self.kubelet = Kubelet(kubelet_config)
             self.kubelet.start()
             
@@ -128,7 +123,7 @@ if __name__ == "__main__":
     config_file = args.config
     if not os.path.exists(config_file):
         print(f"[ERROR]Config file not found: {config_file}")
-        sys.exit(1)
+        exit(1)
         
     print(f"[INFO]Using config file: {config_file}")
     
@@ -137,7 +132,7 @@ if __name__ == "__main__":
             data = yaml.safe_load(file)
     except Exception as e:
         print(f"[ERROR]Failed to read config file: {e}")
-        sys.exit(1)
+        exit(1)
     
     # print(data)
 
@@ -145,3 +140,13 @@ if __name__ == "__main__":
     node = Node(data)
     print(f"[INFO]Node created: {node.name}")
     node.run()
+    
+    # 保持运行状态
+    try:
+        print(f"[INFO]Node {node.name} is running. Press Ctrl+C to stop.")
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print(f"\n[INFO]Shutting down Node {node.name}...")
+        node.stop()
+        print(f"[INFO]Node {node.name} stopped successfully")

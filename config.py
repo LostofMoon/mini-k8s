@@ -8,11 +8,25 @@ class Config:
     SERVER_URI = f"http://{HOST}:{SERVER_PORT}"
 
 #---------------------------------------------------------------------------------------
+    # KAFKA_SERVER = "10.119.15.182:9092"  # server
+    # KAFKA_SERVER = "10.180.196.84:9092" # zys
+    
+    # Kafka Configuration
+    KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
+    
+    # Kafka Topics - Kubelet通信主题
+    KUBELET_TOPIC = "kubelet-{node_id}"
+    
+    # 生成特定节点的Kubelet topic
+    @classmethod
+    def get_kubelet_topic(cls, node_id):
+        return cls.KUBELET_TOPIC.format(node_id=node_id)
+
+#---------------------------------------------------------------------------------------
 
     # ETCD KEY
     NODES_KEY = "/nodes/"
     NODE_SPEC_KEY = "/nodes/{node_name}"
-
     GLOBAL_PODS_KEY = "/pods/"
     POD_SPEC_KEY = "/pods/{namespace}/{pod_name}"
 
@@ -36,8 +50,7 @@ class Config:
     POD_STATUS_URL_F = "/api/v1/namespaces/<namespace>/pods/<pod_name>/status"
     POD_STATUS_URL = "/api/v1/namespaces/{namespace}/pods/{pod_name}/status"
 
-    KAFKA_SERVER = "10.119.15.182:9092"  # server
-    # KAFKA_SERVER = "10.180.196.84:9092" # zys
+
 
     # -------------------- 资源主题定义 --------------------
     # 与Node的kubelet组件交互

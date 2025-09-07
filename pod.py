@@ -112,6 +112,11 @@ class Pod:
                 pod_spec["metadata"] = {}
             pod_spec["metadata"]["uid"] = self.id
             
+            # 添加节点信息和状态信息
+            if self.node_name:
+                pod_spec["node"] = self.node_name
+            pod_spec["status"] = self.status
+            
             # 发送POST请求到ApiServer
             response = requests.post(url, json=pod_spec, timeout=10)
             
@@ -138,6 +143,27 @@ class Pod:
             return False
         except Exception as e:
             print(f"[ERROR]Failed to create Pod: {e}")
+            return False
+    
+    def create_containers_only(self):
+        """
+        仅创建Docker容器，不向ApiServer注册Pod
+        这个方法专门供Kubelet使用，因为Pod已经通过调度器注册到ApiServer了
+        """
+        print(f"[INFO]Creating Docker containers for Pod {self.namespace}:{self.name}")
+        
+        try:
+            # 直接创建Docker容器
+            if not self._create_docker_containers():
+                print(f"[ERROR]Failed to create Docker containers for Pod")
+                return False
+            
+            self.status = Config.POD_STATUS_RUNNING
+            print(f"[INFO]Pod {self.namespace}:{self.name} containers created successfully")
+            return True
+                
+        except Exception as e:
+            print(f"[ERROR]Failed to create Pod containers: {e}")
             return False
     
     def _create_docker_containers(self):

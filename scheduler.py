@@ -1,13 +1,24 @@
 import time
 import requests
+import json
 from config import Config
+from confluent_kafka import Producer
 
 class Scheduler:
-    def __init__(self, apiserver_host="localhost", interval=5):
+    def __init__(self, apiserver_host="localhost", interval=5, kafka_bootstrap_servers=None):
         self.apiserver_host = apiserver_host
         self.base_url = f"http://{apiserver_host}:5050"
         self.interval = interval  # 调度周期（秒）
-        print(f"[INFO]Scheduler initialized, ApiServer: {self.base_url}")
+        
+        # 初始化Kafka Producer - 使用配置文件中的默认值
+        kafka_servers = kafka_bootstrap_servers or Config.KAFKA_BOOTSTRAP_SERVERS
+        self.kafka_config = {
+            'bootstrap.servers': kafka_servers,
+            'client.id': 'mini-k8s-scheduler'
+        }
+        self.producer = Producer(self.kafka_config)
+        
+        print(f"[INFO]Scheduler initialized, ApiServer: {self.base_url}, Kafka: {kafka_servers}")
 
     def get_all_nodes(self):
         url = f"{self.base_url}/api/v1/nodes"
@@ -78,18 +89,67 @@ class Scheduler:
                             print(f"[INFO]Pod {pod_ns}/{pod_name} 成功分配到 {target_node}")
                             # 立即更新本地计数，确保下一个Pod调度时考虑到这个变化
                             node_pod_count[target_node] += 1
+                            
+                            # 发送Kafka消息通知Kubelet
+                            self._send_pod_assignment(target_node, pod)
+                            
                         else:
                             print(f"[WARN]分配失败: {resp.status_code} {resp.text}")
                     except Exception as e:
                         print(f"[ERROR]调度Pod失败: {e}")
             time.sleep(self.interval)
+    
+    def _send_pod_assignment(self, target_node, pod_spec):
+        """
+        发送Pod分配消息到Kafka
+        
+        Args:
+            target_node: 目标节点名称
+            pod_spec: Pod规格
+        """
+        try:
+            # 构造消息
+            message = {
+                "action": "create_pod",
+                "node": target_node,
+                "pod_spec": pod_spec,
+                "timestamp": time.time()
+            }
+            
+            # 发送到指定节点的topic
+            # topic = Config.KUBELET_TOPIC.format(node_id=target_node)
+            topic = Config.get_kubelet_topic(target_node)
+            message_json = json.dumps(message)
+            
+            self.producer.produce(topic, message_json)
+            self.producer.flush()  # 确保消息被发送
+            
+            pod_ns = pod_spec.get("metadata", {}).get("namespace", "default")
+            pod_name = pod_spec.get("metadata", {}).get("name")
+            print(f"[INFO]Kafka消息已发送: Pod {pod_ns}/{pod_name} -> Topic {topic}")
+            
+        except Exception as e:
+            print(f"[ERROR]发送Kafka消息失败: {e}")
+            
+    def close(self):
+        """关闭资源"""
+        if hasattr(self, 'producer'):
+            self.producer.flush()
+            print("[INFO]Scheduler resources closed")
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Mini-K8s Scheduler")
     parser.add_argument("--apiserver", type=str, default="localhost", help="ApiServer地址")
     parser.add_argument("--interval", type=int, default=5, help="调度周期(秒)")
+    parser.add_argument("--kafka", type=str, default=None, 
+                       help=f"Kafka Bootstrap Servers (default: {Config.KAFKA_BOOTSTRAP_SERVERS})")
     args = parser.parse_args()
     
-    scheduler = Scheduler(apiserver_host=args.apiserver, interval=args.interval)
-    scheduler.schedule()
+    scheduler = Scheduler(apiserver_host=args.apiserver, interval=args.interval, 
+                         kafka_bootstrap_servers=args.kafka)
+    try:
+        scheduler.schedule()
+    except KeyboardInterrupt:
+        print("[INFO]Stopping scheduler...")
+        scheduler.close()

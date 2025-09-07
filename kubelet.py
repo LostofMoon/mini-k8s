@@ -6,6 +6,7 @@ from uuid import uuid1
 
 from config import Config
 from pod import Pod
+from confluent_kafka import Consumer, KafkaError
 
 
 class Kubelet:
@@ -18,10 +19,21 @@ class Kubelet:
                 - node_id: 节点ID
                 - apiserver: ApiServer地址
                 - subnet_ip: 子网IP
+                - kafka_bootstrap_servers: Kafka服务器地址
         """
+
         self.node_id = kubelet_config.get("node_id")
         self.apiserver_host = kubelet_config.get("apiserver", "localhost")
         self.subnet_ip = kubelet_config.get("subnet_ip")
+        
+        # Kafka配置
+        kafka_servers = kubelet_config.get("kafka_bootstrap_servers")
+        self.kafka_config = {
+            'bootstrap.servers': kafka_servers,
+            'group.id': f'kubelet-{self.node_id}',
+            'auto.offset.reset': 'earliest',  # 从最早的消息开始读取
+            'enable.auto.commit': True
+        }
         
         # Pod缓存 - 存储当前节点上的所有Pod
         self.pods_cache = {}  # {namespace/name: Pod}
@@ -29,7 +41,7 @@ class Kubelet:
         # 运行状态
         self.running = False
         
-        print(f"[INFO]Kubelet initialized for node {self.node_id}")
+        print(f"[INFO]Kubelet initialized for node {self.node_id}, Kafka: {kafka_servers}")
         
     def start(self):
         """启动Kubelet"""
@@ -39,6 +51,10 @@ class Kubelet:
         # 启动监控循环
         monitor_thread = Thread(target=self._monitor_loop, daemon=True)
         monitor_thread.start()
+        
+        # 启动Kafka监听线程
+        kafka_thread = Thread(target=self._kafka_listener, daemon=True)
+        kafka_thread.start()
         
         print(f"[INFO]Kubelet started successfully")
         
@@ -67,35 +83,10 @@ class Kubelet:
                 print(f"[WARNING]Pod {pod_key} already exists on this node")
                 return False
             
-            # 设置节点信息
+            # 设置节点信息 - Pod需要知道自己在哪个节点上
             pod.node_name = self.node_id
             
-            # 首先向ApiServer注册Pod
-            pod_data = {
-                "apiVersion": pod_yaml.get("apiVersion", "v1"),
-                "kind": "Pod",
-                "metadata": {
-                    "name": pod.name,
-                    "namespace": pod.namespace,
-                    "labels": pod_yaml.get("metadata", {}).get("labels", {})
-                },
-                "spec": pod_yaml.get("spec", {}),
-                "status": Config.POD_STATUS_CREATING,
-                "node": self.node_id,
-                "ip": "",
-                "containers": len(pod_yaml.get("spec", {}).get("containers", []))
-            }
-            
-            # 注册到ApiServer
-            try:
-                api_url = f"http://{self.apiserver_host}:5050/api/v1/namespaces/{pod.namespace}/pods/{pod.name}"
-                response = requests.post(api_url, json=pod_data, timeout=5)
-                if response.status_code not in [200, 201, 409]:  # 409表示已存在，可以忽略
-                    print(f"[WARNING]Failed to register Pod to ApiServer: {response.status_code}")
-            except Exception as e:
-                print(f"[WARNING]Failed to register Pod to ApiServer: {e}")
-            
-            # 创建Pod
+            # 创建Pod - Pod.create()方法会自动注册到ApiServer
             success = pod.create()
             if success:
                 # 添加到缓存
@@ -182,6 +173,7 @@ class Kubelet:
             
         return pods_info
     
+    # TODO: 暂时没有写监测循环的细节
     def _monitor_loop(self):
         """监控循环 - 定期检查Pod状态并上报"""
         print(f"[INFO]Starting monitor loop for node {self.node_id}")
@@ -237,6 +229,152 @@ class Kubelet:
                 
         except Exception as e:
             print(f"[ERROR]Failed to report Pod status to ApiServer: {e}")
+    
+    def _ensure_kafka_topic_exists(self, topic):
+        """
+        确保Kafka主题存在，如果不存在则创建
+        
+        Args:
+            topic: Kafka主题名称
+        """
+        try:
+            from confluent_kafka.admin import AdminClient, NewTopic
+            
+            # 创建Admin客户端
+            admin_client = AdminClient({
+                'bootstrap.servers': self.kafka_config.get('bootstrap.servers', Config.KAFKA_BOOTSTRAP_SERVERS)
+            })
+            
+            # 检查主题是否已存在
+            metadata = admin_client.list_topics(timeout=10)
+            if topic in metadata.topics:
+                print(f"[DEBUG]Kafka topic {topic} already exists")
+                return True
+            
+            # 创建主题
+            new_topic = NewTopic(topic, num_partitions=1, replication_factor=1)
+            futures = admin_client.create_topics([new_topic])
+            
+            # 等待创建完成
+            for topic_name, future in futures.items():
+                try:
+                    future.result()  # 等待创建完成
+                    print(f"[INFO]Kafka topic {topic_name} created successfully")
+                    return True
+                except Exception as e:
+                    if "already exists" in str(e).lower():
+                        print(f"[DEBUG]Kafka topic {topic_name} already exists")
+                        return True
+                    else:
+                        print(f"[ERROR]Failed to create Kafka topic {topic_name}: {e}")
+                        return False
+            
+        except Exception as e:
+            print(f"[ERROR]Failed to ensure Kafka topic exists: {e}")
+            return False
+    
+    def _kafka_listener(self):
+        """
+        Kafka监听循环 - 监听调度器分配的Pod任务
+        """
+        print(f"[INFO]Starting Kafka listener for node {self.node_id}")
+        
+        # 首先确保主题存在
+        topic = Config.get_kubelet_topic(self.node_id)
+        self._ensure_kafka_topic_exists(topic)
+        
+        # 创建Kafka Consumer
+        consumer = Consumer(self.kafka_config)
+        consumer.subscribe([topic])
+        
+        print(f"[INFO]Subscribed to Kafka topic: {topic}")
+        
+        try:
+            while self.running:
+                msg = consumer.poll(timeout=1.0)
+                
+                # 添加调试日志
+                if msg is None:
+                    print(f"[DEBUG]Kafka poll timeout for topic {topic}")
+                    continue
+                    
+                if msg.error():
+                    if msg.error().code() == KafkaError._PARTITION_EOF:
+                        continue
+                    else:
+                        print(f"[ERROR]Kafka error: {msg.error()}")
+                        continue
+                
+                try:
+                    # 解析消息
+                    message_data = json.loads(msg.value().decode('utf-8'))
+                    action = message_data.get("action")
+                    
+                    print(f"[INFO]Received Kafka message: {action}")
+                    
+                    if action == "create_pod":
+                        pod_spec = message_data.get("pod_spec")
+                        if pod_spec:
+                            self._handle_create_pod_from_kafka(pod_spec)
+                        else:
+                            print("[ERROR]Pod spec missing in Kafka message")
+                    else:
+                        print(f"[WARN]Unknown action in Kafka message: {action}")
+                        
+                except json.JSONDecodeError as e:
+                    print(f"[ERROR]Failed to parse Kafka message: {e}")
+                except Exception as e:
+                    print(f"[ERROR]Error processing Kafka message: {e}")
+                    
+        except Exception as e:
+            print(f"[ERROR]Kafka listener error: {e}")
+        finally:
+            consumer.close()
+            print(f"[INFO]Kafka listener stopped for node {self.node_id}")
+    
+    def _handle_create_pod_from_kafka(self, pod_spec):
+        """
+        处理从Kafka接收到的创建Pod请求
+        
+        Args:
+            pod_spec: Pod规格字典
+        """
+        try:
+            pod_ns = pod_spec.get("metadata", {}).get("namespace", "default")
+            pod_name = pod_spec.get("metadata", {}).get("name")
+            pod_key = f"{pod_ns}/{pod_name}"
+            
+            print(f"[INFO]Processing Pod creation from Kafka: {pod_key}")
+            
+            # 检查是否已存在
+            if pod_key in self.pods_cache:
+                print(f"[WARNING]Pod {pod_key} already exists on this node")
+                return
+            
+            # 创建Pod实例
+            pod = Pod(pod_spec)
+            
+            # 设置节点信息
+            pod.node_name = self.node_id
+            
+            # 创建Pod - 注意：这里不需要再向ApiServer注册，因为调度器已经设置了node字段
+            success = pod.create_containers_only()  # 使用新方法，仅创建容器
+            if success:
+                # 添加到缓存
+                self.pods_cache[pod_key] = pod
+                
+                # 向ApiServer报告状态
+                self._report_pod_status(pod)
+                
+                print(f"[INFO]Pod {pod_key} created successfully on node {self.node_id} via Kafka")
+                return True
+            else:
+                print(f"[ERROR]Failed to create Pod {pod_key} via Kafka")
+                return False
+                
+        except Exception as e:
+            print(f"[ERROR]Failed to process Pod creation from Kafka: {e}")
+            return False
 
 
 if __name__ == "__main__":
@@ -254,13 +392,16 @@ if __name__ == "__main__":
                        help="ApiServer address")
     parser.add_argument("--pod-config", type=str, default="./testFile/pod-test.yaml",
                        help="Test Pod config file")
+    parser.add_argument("--kafka", type=str, default=None,
+                       help=f"Kafka Bootstrap Servers (default: {Config.KAFKA_BOOTSTRAP_SERVERS})")
     args = parser.parse_args()
     
     # 创建Kubelet配置
     kubelet_config = {
         "node_id": args.node_id,
         "apiserver": args.apiserver,
-        "subnet_ip": "10.244.1.0/24"
+        "subnet_ip": "10.244.1.0/24",
+        "kafka_bootstrap_servers": args.kafka
     }
     
     # 创建Kubelet实例
