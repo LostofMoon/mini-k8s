@@ -10,12 +10,23 @@ from config import Config
 
 
 class NetworkManager:
-    """Pod网络管理器，负责IP分配、网络配置和DNS集成"""
+    """Pod网络管理器，负责IP分配和网络配置 (单例模式)"""
+    
+    _instance = None
+    _initialized = False
+    
+    def __new__(cls):
+        """实现单例模式"""
+        if cls._instance is None:
+            cls._instance = super(NetworkManager, cls).__new__(cls)
+        return cls._instance
     
     def __init__(self):
-        # 网络配置参数 - 参考旧版本的网络设置
+        # 如果已经初始化过，直接返回
+        if NetworkManager._initialized:
+            return
+            
         self.subnet_base = "10.5.0.0/16"  # Pod网络子网
-        self.dns_ip = "10.5.53.5"  # CoreDNS IP地址
         self.bridge_name = "mini-k8s-br0"  # 网桥名称
         self.ip_pool = set()  # 已分配的IP地址池
         self.pod_ip_mapping = {}  # Pod名称到IP的映射
@@ -23,6 +34,9 @@ class NetworkManager:
         
         # 初始化网络基础设施
         self._init_network_infrastructure()
+        
+        # 标记为已初始化
+        NetworkManager._initialized = True
         
     def _init_network_infrastructure(self):
         """初始化网络基础设施，创建网桥和网络配置"""
@@ -34,7 +48,7 @@ class NetworkManager:
             # 初始化IP池
             self._initialize_ip_pool()
             
-            print(f"[INFO] 网络管理器初始化完成 - 子网: {self.subnet_base}, DNS: {self.dns_ip}")
+            print(f"[INFO] 网络管理器初始化完成 - 子网: {self.subnet_base}")
             
         except Exception as e:
             print(f"[ERROR] 网络基础设施初始化失败: {e}")
@@ -82,6 +96,26 @@ class NetworkManager:
                 if i < 10 or i >= network.num_addresses - 12:  # 预留前10个和后10个
                     reserved_ips.add(str(ip))
                     
+            # 检查Docker网络中已分配的IP，避免冲突
+            try:
+                import subprocess
+                result = subprocess.run([
+                    "docker", "network", "inspect", self.bridge_name,
+                    "--format", "{{range .Containers}}{{.IPv4Address}}{{end}}"
+                ], capture_output=True, text=True, check=False)
+                
+                if result.returncode == 0 and result.stdout.strip():
+                    # 解析已使用的IP地址
+                    used_ips_raw = result.stdout.strip().split()
+                    for ip_with_mask in used_ips_raw:
+                        if "/" in ip_with_mask:
+                            used_ip = ip_with_mask.split("/")[0]
+                            reserved_ips.add(used_ip)
+                            print(f"[INFO] 发现已使用的IP: {used_ip}")
+                            
+            except Exception as e:
+                print(f"[WARNING] 检查已使用IP时出错: {e}")
+                    
             self.ip_pool = reserved_ips
             print(f"[INFO] IP池初始化完成，预留{len(self.ip_pool)}个地址")
             
@@ -96,21 +130,76 @@ class NetworkManager:
             if pod_key in self.pod_ip_mapping:
                 return self.pod_ip_mapping[pod_key]
             
+            # 刷新IP池状态，检查Docker网络中的实际使用情况
+            self._refresh_ip_pool_state()
+            
             # 分配新IP
             network = ipaddress.IPv4Network(self.subnet_base)
             for ip in network.hosts():
                 ip_str = str(ip)
                 if ip_str not in self.ip_pool:
-                    self.ip_pool.add(ip_str)
-                    self.pod_ip_mapping[pod_key] = ip_str
-                    print(f"[INFO] 为Pod {pod_key} 分配IP: {ip_str}")
-                    return ip_str
+                    # 双重检查：确认IP未被Docker容器使用
+                    if not self._is_ip_in_use(ip_str):
+                        self.ip_pool.add(ip_str)
+                        self.pod_ip_mapping[pod_key] = ip_str
+                        print(f"[INFO] 为Pod {pod_key} 分配IP: {ip_str}")
+                        return ip_str
+                    else:
+                        # IP正在使用中，添加到已用池
+                        self.ip_pool.add(ip_str)
                     
             raise Exception("没有可用的IP地址")
             
         except Exception as e:
             print(f"[ERROR] IP分配失败: {e}")
             raise
+            
+    def _refresh_ip_pool_state(self):
+        """刷新IP池状态，与Docker网络实际情况同步"""
+        try:
+            import subprocess
+            result = subprocess.run([
+                "docker", "network", "inspect", self.bridge_name,
+                "--format", "{{range .Containers}}{{.IPv4Address}}\n{{end}}"
+            ], capture_output=True, text=True, check=False)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                used_ips = set()
+                lines = result.stdout.strip().split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if line and "/" in line:
+                        used_ip = line.split("/")[0]
+                        if used_ip:  # 确保IP不为空
+                            used_ips.add(used_ip)
+                
+                # 更新IP池状态
+                self.ip_pool.update(used_ips)
+                print(f"[DEBUG] 刷新IP池状态，当前已用IP: {used_ips}")
+                        
+        except Exception as e:
+            print(f"[WARNING] 刷新IP池状态时出错: {e}")
+            
+    def _is_ip_in_use(self, ip_str):
+        """检查IP地址是否正在被Docker容器使用"""
+        try:
+            import subprocess
+            result = subprocess.run([
+                "docker", "network", "inspect", self.bridge_name,
+                "--format", "{{range .Containers}}{{.IPv4Address}}{{end}}"
+            ], capture_output=True, text=True, check=False)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                for ip_with_mask in result.stdout.strip().split():
+                    if "/" in ip_with_mask:
+                        used_ip = ip_with_mask.split("/")[0]
+                        if used_ip == ip_str:
+                            return True
+            return False
+            
+        except Exception as e:
+            print(f"[WARNING] 检查IP使用状态时出错: {e}")
+            return False
             
     def release_pod_ip(self, pod_name: str, namespace: str = "default"):
         """释放Pod的IP地址"""
@@ -140,8 +229,6 @@ class NetworkManager:
             network_config = {
                 "name": self.bridge_name,
                 "ip": pod_ip,
-                "dns_servers": [self.dns_ip],
-                "search_domains": [f"{namespace}.svc.cluster.local", "svc.cluster.local", "cluster.local"],
                 "subnet": self.subnet_base
             }
             
@@ -176,29 +263,11 @@ class NetworkManager:
         """获取网络管理器状态信息"""
         return {
             "subnet": self.subnet_base,
-            "dns_ip": self.dns_ip,
             "bridge_name": self.bridge_name,
             "allocated_ips": len(self.ip_pool),
             "active_pods": len(self.pod_ip_mapping),
             "pod_mappings": dict(self.pod_ip_mapping)
         }
-        
-    def setup_dns_resolution(self, container_id: str, pod_name: str, namespace: str = "default"):
-        """设置容器的DNS解析"""
-        try:
-            # 参考旧版本的DNS配置方式
-            pod_key = f"{namespace}/{pod_name}"
-            network_config = self.network_cache.get(pod_key)
-            
-            if not network_config:
-                print(f"[WARNING] 未找到Pod {pod_key} 的网络配置")
-                return
-                
-            # 这里可以进一步集成CoreDNS或其他DNS服务
-            print(f"[INFO] 为容器 {container_id[:12]} 设置DNS: {network_config['dns_servers']}")
-            
-        except Exception as e:
-            print(f"[ERROR] DNS设置失败: {e}")
 
 
 class PodNetworkAttacher:
@@ -246,9 +315,6 @@ class PodNetworkAttacher:
                 else:
                     print(f"[INFO] 容器 {container_id[:12]} 已正确连接到网络 {network_name}, IP: {current_ip}")
                 
-            # 设置DNS
-            self.network_manager.setup_dns_resolution(container_id, pod_name, namespace)
-            
             return True
             
         except Exception as e:

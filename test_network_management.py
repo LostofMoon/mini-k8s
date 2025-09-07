@@ -29,7 +29,6 @@ class TestNetworkManagement:
         
         # 检查网络管理器基本属性
         assert self.network_manager.subnet_base == "10.5.0.0/16"
-        assert self.network_manager.dns_ip == "10.5.53.5"
         assert self.network_manager.bridge_name == "mini-k8s-br0"
         
         # 检查IP池初始化
@@ -38,7 +37,6 @@ class TestNetworkManagement:
         
         print(f"✓ 网络管理器初始化成功")
         print(f"  子网: {self.network_manager.subnet_base}")
-        print(f"  DNS: {self.network_manager.dns_ip}")
         print(f"  网桥: {self.network_manager.bridge_name}")
         print(f"  预留IP数量: {len(self.network_manager.ip_pool)}")
     
@@ -96,13 +94,10 @@ class TestNetworkManagement:
         # 验证网络配置结构
         assert "name" in network_config
         assert "ip" in network_config
-        assert "dns_servers" in network_config
         assert "search_domains" in network_config
         assert "subnet" in network_config
         
         # 验证DNS配置
-        assert self.network_manager.dns_ip in network_config["dns_servers"]
-        assert "default.svc.cluster.local" in network_config["search_domains"]
         
         # 验证网络名称
         assert network_config["name"] == self.network_manager.bridge_name
@@ -128,7 +123,6 @@ class TestNetworkManagement:
         
         # 验证信息结构
         assert "subnet" in network_info
-        assert "dns_ip" in network_info
         assert "bridge_name" in network_info
         assert "allocated_ips" in network_info
         assert "active_pods" in network_info

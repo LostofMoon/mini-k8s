@@ -220,11 +220,6 @@ class Pod:
                 if container.create(volumes=self.volumes, network_mode=network_mode):
                     self.docker_containers.append(container.docker_container)
                     print(f"[INFO]Container {container.container_name} created successfully")
-                    
-                    # 设置容器的DNS解析
-                    self.network_manager.setup_dns_resolution(
-                        container.docker_container.id, self.name, self.namespace
-                    )
                 else:
                     print(f"[ERROR]Failed to create container {container.container_name}")
                     return False
@@ -479,7 +474,6 @@ class Pod:
             network_info = {
                 "allocated_ip": pod_ip,
                 "subnet_ip": self.subnet_ip,
-                "dns_servers": ["10.5.53.5"],  # CoreDNS IP
                 "network_mode": "Pod"
             }
         

@@ -10,7 +10,7 @@ spec:
   - name: pod1-container1
     image: registry.cn-hangzhou.aliyuncs.com/tanjunchen/network-multitool:v1
     command: ["sh", "-c"]
-    args: ["echo 'Hello, Kubernetes!'"]
+    args: ["echo 'Hello, Kubernetes! I am pod1-container1' && sleep 3600"]
     ports:
     - containerPort: 8080
       protocol: TCP

@@ -7,14 +7,15 @@ metadata:
     app: hello-world
 spec:
   containers:
-  - name: pod1-container1
+  - name: pod3-container1
     image: registry.cn-hangzhou.aliyuncs.com/tanjunchen/network-multitool:v1
-    command: ["Wrong Command"]
+    command: ["sh", "-c"]
+    args: ["echo 'Hello, Kubernetes! I am pod3-container1' && sleep 3600"]
     ports:
     - containerPort: 8080
       protocol: TCP
-    - containerPort: 8081
-      hostPort: 8081
+    - containerPort: 8083
+      hostPort: 8083
       protocol: UDP
     resources:
       requests:
