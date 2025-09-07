@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-"""
-测试Container类和重构后的Pod类
-"""
-
 import yaml
 import sys
 import os
