@@ -1,4 +1,4 @@
-conda activate k8s; test_scheduler_real.py
+conda activate k8s; python apiServer.py
 
 conda activate k8s; python scheduler.py --apiserver localhost --interval 3
 
