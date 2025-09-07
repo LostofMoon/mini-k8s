@@ -1,10 +1,6 @@
 import docker
 import os
 from uuid import uuid1
-import platform
-
-from config import Config
-
 
 class Container:
     def __init__(self, container_config, pod_name=None, namespace="default"):

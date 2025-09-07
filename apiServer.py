@@ -1,7 +1,4 @@
 from flask import Flask, request, jsonify
-import json
-import platform
-import docker
 from time import time
 
 from config import Config
@@ -14,19 +11,6 @@ class ApiServer:
         print("[INFO]ApiServer Init...")
         self.etcd = Etcd(host = Config.HOST, port =  Config.ETCD_PORT)
         self.app = Flask(__name__)
-
-        # if platform.system() == "Windows":
-        #     self.docker = docker.DockerClient(
-        #         base_url="npipe:////./pipe/docker_engine",
-        #         version="1.25",
-        #         timeout=5
-        #     )
-        # else:
-        #     self.docker = docker.DockerClient(
-        #         base_url="unix://var/run/docker.sock",
-        #         version="1.25",
-        #         timeout=5
-        #     )
 
         self.etcd.reset()
 
