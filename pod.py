@@ -6,6 +6,7 @@ import platform
 import os
 
 from config import Config
+from container import Container
 
 
 class Pod:
@@ -27,19 +28,10 @@ class Pod:
         spec = pod_json.get("spec", {})
         
         # 容器配置
-        self.containers_config = []
+        self.containers = []
         for container_json in spec.get("containers", []):
-            container = {
-                "name": container_json.get("name"),
-                "image": container_json.get("image"),
-                "command": container_json.get("command", []),
-                "args": container_json.get("args", []),
-                "ports": container_json.get("ports", []),
-                "env": container_json.get("env", []),
-                "volumeMounts": container_json.get("volumeMounts", []),
-                "resources": container_json.get("resources", {})
-            }
-            self.containers_config.append(container)
+            container = Container(container_json, pod_name=self.name, namespace=self.namespace)
+            self.containers.append(container)
         
         # 卷配置
         self.volumes = {}
@@ -95,9 +87,8 @@ class Pod:
             print(f"[INFO]Docker client connected successfully")
             
         except Exception as e:
-            print(f"[WARNING]Docker client connection failed: {e}")
-            print(f"[INFO]Pod will run in simulation mode")
-            self.docker_client = None
+            print(f"[ERROR]Docker client connection failed: {e}")
+            raise Exception(f"Docker is required but not available: {e}")
     
     def create(self):
         """
@@ -147,8 +138,8 @@ class Pod:
     def _create_docker_containers(self):
         """创建真实的Docker容器"""
         if not self.docker_client:
-            print(f"[WARNING]Docker client not available, using simulation mode")
-            return self._create_simulated_containers()
+            print(f"[ERROR]Docker client not available")
+            return False
         
         try:
             # 1. 创建pause容器（用于网络共享）
@@ -170,9 +161,9 @@ class Pod:
                 
                 # 收集所有需要映射的端口
                 pause_ports = {}
-                for container_config in self.containers_config:
-                    if container_config.get("ports"):
-                        for port_config in container_config["ports"]:
+                for container in self.containers:
+                    if container.ports:
+                        for port_config in container.ports:
                             container_port = port_config.get("containerPort")
                             host_port = port_config.get("hostPort")
                             protocol = port_config.get("protocol", "TCP").lower()
@@ -205,31 +196,17 @@ class Pod:
             print(f"[INFO]Pod IP address: {self.subnet_ip}")
             
             # 2. 创建业务容器
-            for container_config in self.containers_config:
-                container_name = f"{self.namespace}_{self.name}_{container_config['name']}"
-                
-                # 检查容器是否已存在，如果存在则删除重建
-                existing = self.docker_client.containers.list(
-                    all=True, 
-                    filters={"name": container_name}
-                )
-                for container in existing:
-                    print(f"[INFO]Removing existing container: {container_name}")
-                    container.remove(force=True)
-                
-                # 构建Docker运行参数
-                docker_args = self._build_docker_args(container_config, container_name)
-                
+            for container in self.containers:
                 # 使用pause容器的网络
-                docker_args["network_mode"] = f"container:{pause_name}"
+                network_mode = f"container:{pause_name}"
                 
-                print(f"[INFO]Creating container: {container_name}")
-                print(f"[DEBUG]Docker args: {docker_args}")
-                
-                container = self.docker_client.containers.run(**docker_args)
-                self.docker_containers.append(container)
-                
-                print(f"[INFO]Container {container_name} created successfully")
+                # 创建容器，传入卷和网络模式
+                if container.create(volumes=self.volumes, network_mode=network_mode):
+                    self.docker_containers.append(container.docker_container)
+                    print(f"[INFO]Container {container.container_name} created successfully")
+                else:
+                    print(f"[ERROR]Failed to create container {container.container_name}")
+                    return False
             
             print(f"[INFO]All containers created for Pod {self.namespace}:{self.name}")
             return True
@@ -240,98 +217,6 @@ class Pod:
             traceback.print_exc()
             return False
     
-    def _create_simulated_containers(self):
-        """模拟容器创建（当Docker不可用时）"""
-        print(f"[INFO]Creating simulated containers for Pod {self.namespace}:{self.name}")
-        
-        # 模拟pause容器
-        pause_name = f"pause_{self.namespace}_{self.name}"
-        print(f"[INFO]Simulated pause container: {pause_name}")
-        
-        # 模拟业务容器
-        for container_config in self.containers_config:
-            container_name = f"{self.namespace}_{self.name}_{container_config['name']}"
-            print(f"[INFO]Simulated container: {container_name} ({container_config['image']})")
-        
-        # 分配模拟IP
-        self.subnet_ip = "10.244.1.100"
-        print(f"[INFO]Simulated Pod IP: {self.subnet_ip}")
-        
-        return True
-    
-    def _build_docker_args(self, container_config, container_name):
-        """构建Docker容器运行参数"""
-        args = {
-            "image": container_config["image"],
-            "name": container_name,
-            "detach": True,
-            "remove": False
-        }
-        
-        # 命令和参数
-        if container_config.get("command"):
-            if container_config.get("args"):
-                # 如果有command和args，组合它们
-                full_command = container_config["command"] + container_config["args"]
-                args["command"] = full_command
-            else:
-                args["command"] = container_config["command"]
-        elif container_config.get("args"):
-            # 只有args，使用默认entrypoint
-            args["command"] = container_config["args"]
-        
-        # 环境变量
-        if container_config.get("env"):
-            env_dict = {}
-            for env_var in container_config["env"]:
-                if isinstance(env_var, dict):
-                    name = env_var.get("name")
-                    value = env_var.get("value", "")
-                    if name:
-                        env_dict[name] = value
-            if env_dict:
-                args["environment"] = env_dict
-        
-        # 端口映射 - 只在非共享网络模式下使用
-        # 注意：当使用 network_mode='container:xxx' 时，不能设置端口映射
-        # 端口映射应该在pause容器创建时处理
-        # if container_config.get("ports"):
-        #     ports = {}
-        #     for port_config in container_config["ports"]:
-        #         container_port = port_config.get("containerPort")
-        #         host_port = port_config.get("hostPort")
-        #         protocol = port_config.get("protocol", "TCP").lower()
-        #         
-        #         if container_port:
-        #             port_key = f"{container_port}/{protocol}"
-        #             if host_port:
-        #                 ports[port_key] = host_port
-        #             else:
-        #                 ports[port_key] = None
-        #     
-        #     if ports:
-        #         args["ports"] = ports
-        
-        # 卷挂载
-        if container_config.get("volumeMounts") and self.volumes:
-            volumes = {}
-            for volume_mount in container_config["volumeMounts"]:
-                volume_name = volume_mount.get("name")
-                mount_path = volume_mount.get("mountPath")
-                read_only = volume_mount.get("readOnly", False)
-                
-                if volume_name in self.volumes and mount_path:
-                    host_path = self.volumes[volume_name]
-                    # 确保宿主机目录存在
-                    os.makedirs(host_path, exist_ok=True)
-                    
-                    bind_config = {"bind": mount_path, "mode": "ro" if read_only else "rw"}
-                    volumes[host_path] = bind_config
-            
-            if volumes:
-                args["volumes"] = volumes
-        
-        return args
     
     def _get_pod_ip(self, pause_container):
         """获取Pod的IP地址"""
@@ -428,24 +313,28 @@ class Pod:
     def _delete_docker_containers(self):
         """删除真实的Docker容器"""
         if not self.docker_client:
-            print(f"[INFO]Simulated containers cleanup for Pod {self.namespace}:{self.name}")
-            return True
+            print(f"[ERROR]Docker client not available")
+            return False
         
         try:
-            # 删除所有关联的容器
-            for container in self.docker_containers:
+            # 删除所有业务容器
+            for container in self.containers:
+                container.delete()
+            
+            # 删除pause容器和直接Docker容器
+            for docker_container in self.docker_containers:
                 try:
-                    container_name = container.name
+                    container_name = docker_container.name
                     print(f"[INFO]Stopping and removing container: {container_name}")
                     
                     # 强制停止容器
-                    container.kill()
-                    container.remove(force=True)
+                    docker_container.kill()
+                    docker_container.remove(force=True)
                     
                     print(f"[INFO]Container {container_name} removed successfully")
                     
                 except Exception as e:
-                    print(f"[WARNING]Failed to remove container {container.name}: {e}")
+                    print(f"[WARNING]Failed to remove container {docker_container.name}: {e}")
             
             # 清空容器列表
             self.docker_containers = []
@@ -474,15 +363,14 @@ class Pod:
                 print(f"[INFO]Cleaned up pause container: {pause_name}")
             
             # 清理业务容器
-            for container_config in self.containers_config:
-                container_name = f"{self.namespace}_{self.name}_{container_config['name']}"
+            for container in self.containers:
                 business_containers = self.docker_client.containers.list(
                     all=True, 
-                    filters={"name": container_name}
+                    filters={"name": container.container_name}
                 )
-                for container in business_containers:
-                    container.remove(force=True)
-                    print(f"[INFO]Cleaned up business container: {container_name}")
+                for docker_container in business_containers:
+                    docker_container.remove(force=True)
+                    print(f"[INFO]Cleaned up business container: {container.container_name}")
                     
         except Exception as e:
             print(f"[WARNING]Failed to cleanup containers by name: {e}")
@@ -490,17 +378,21 @@ class Pod:
     def start(self):
         """启动Pod中的所有容器"""
         if not self.docker_client:
-            print(f"[INFO]Simulated start for Pod {self.namespace}:{self.name}")
-            self.status = Config.POD_STATUS_RUNNING
-            return True
+            print(f"[ERROR]Docker client not available for Pod {self.namespace}:{self.name}")
+            return False
         
         try:
             print(f"[INFO]Starting Pod {self.namespace}:{self.name}")
             
-            for container in self.docker_containers:
-                if container.status != "running":
-                    container.start()
-                    print(f"[INFO]Started container: {container.name}")
+            # 启动所有业务容器
+            for container in self.containers:
+                container.start()
+            
+            # 启动pause容器和其他直接Docker容器
+            for docker_container in self.docker_containers:
+                if docker_container.status != "running":
+                    docker_container.start()
+                    print(f"[INFO]Started container: {docker_container.name}")
             
             self.status = Config.POD_STATUS_RUNNING
             print(f"[INFO]Pod {self.namespace}:{self.name} started successfully")
@@ -513,17 +405,21 @@ class Pod:
     def stop(self):
         """停止Pod中的所有容器"""
         if not self.docker_client:
-            print(f"[INFO]Simulated stop for Pod {self.namespace}:{self.name}")
-            self.status = Config.POD_STATUS_STOPPED
-            return True
+            print(f"[ERROR]Docker client not available for Pod {self.namespace}:{self.name}")
+            return False
         
         try:
             print(f"[INFO]Stopping Pod {self.namespace}:{self.name}")
             
-            for container in self.docker_containers:
-                if container.status == "running":
-                    container.stop()
-                    print(f"[INFO]Stopped container: {container.name}")
+            # 停止所有业务容器
+            for container in self.containers:
+                container.stop()
+            
+            # 停止pause容器和其他直接Docker容器
+            for docker_container in self.docker_containers:
+                if docker_container.status == "running":
+                    docker_container.stop()
+                    print(f"[INFO]Stopped container: {docker_container.name}")
             
             self.status = Config.POD_STATUS_STOPPED
             print(f"[INFO]Pod {self.namespace}:{self.name} stopped successfully")
@@ -536,7 +432,7 @@ class Pod:
     def get_status(self):
         """获取Pod状态信息"""
         # 刷新容器状态
-        if self.docker_client and self.docker_containers:
+        if self.docker_client and (self.docker_containers or self.containers):
             self._refresh_status()
         
         return {
@@ -544,39 +440,57 @@ class Pod:
             "status": self.status,
             "ip": self.subnet_ip,
             "node": self.node_name,
-            "containers": len(self.containers_config),
-            "docker_containers": len(self.docker_containers) if self.docker_containers else 0
+            "containers": len(self.containers),
+            "docker_containers": len(self.docker_containers) if self.docker_containers else 0,
+            "container_statuses": [container.get_info() for container in self.containers]
         }
     
     def _refresh_status(self):
         """刷新Pod状态（基于容器状态）"""
-        if not self.docker_client or not self.docker_containers:
-            return self.status
-        
         try:
             running_count = 0
             stopped_count = 0
             failed_count = 0
+            total_containers = 0
             
-            for container in self.docker_containers:
-                container.reload()
-                status = container.status
+            # 检查业务容器状态
+            for container in self.containers:
+                container_status = container.get_status()
+                total_containers += 1
                 
-                if status == "running":
+                if container_status == "Running":
                     running_count += 1
-                elif status == "exited":
-                    exit_code = container.attrs.get("State", {}).get("ExitCode", 0)
-                    if exit_code == 0:
-                        stopped_count += 1
-                    else:
-                        failed_count += 1
-                else:
-                    # creating, restarting, etc.
-                    pass
+                elif container_status == "Stopped":
+                    stopped_count += 1
+                elif container_status in ["Failed", "Unknown"]:
+                    failed_count += 1
+            
+            # 检查直接Docker容器状态（如pause容器）
+            if self.docker_client and self.docker_containers:
+                for docker_container in self.docker_containers:
+                    try:
+                        docker_container.reload()
+                        status = docker_container.status
+                        total_containers += 1
+                        
+                        if status == "running":
+                            running_count += 1
+                        elif status == "exited":
+                            exit_code = docker_container.attrs.get("State", {}).get("ExitCode", 0)
+                            if exit_code == 0:
+                                stopped_count += 1
+                            else:
+                                failed_count += 1
+                        else:
+                            # creating, restarting, etc.
+                            pass
+                    except Exception as e:
+                        print(f"[WARNING]Failed to check Docker container status: {e}")
             
             # 根据容器状态更新Pod状态
-            total_containers = len(self.docker_containers)
-            if running_count == total_containers:
+            if total_containers == 0:
+                self.status = Config.POD_STATUS_CREATING
+            elif running_count == total_containers:
                 self.status = Config.POD_STATUS_RUNNING
             elif stopped_count == total_containers:
                 self.status = Config.POD_STATUS_STOPPED
