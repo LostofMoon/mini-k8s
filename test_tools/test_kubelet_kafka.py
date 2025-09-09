@@ -53,13 +53,13 @@ def test_kubelet_kafka():
                 print(f"[INFO]Message content: {message_data}")
                 
                 if action == "create_pod":
-                    pod_spec = message_data.get("pod_spec")
-                    if pod_spec:
-                        pod_name = pod_spec.get("metadata", {}).get("name", "unknown")
+                    pod_data = message_data.get("pod_data")
+                    if pod_data:
+                        pod_name = pod_data.get("metadata", {}).get("name", "unknown")
                         print(f"[INFO]Would create Pod: {pod_name}")
-                        # 这里应该调用 _handle_create_pod_from_kafka(pod_spec)
+                        # 这里应该调用 create_pod(pod_data)
                     else:
-                        print("[ERROR]Pod spec missing in Kafka message")
+                        print("[ERROR]Pod data missing in Kafka message")
                 else:
                     print(f"[WARN]Unknown action in Kafka message: {action}")
                         

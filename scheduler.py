@@ -133,17 +133,17 @@ class Scheduler:
             else:
                 print(f"[WARNING]Pod {pod_ns}/{pod_name} 未分配到节点，跳过删除通知")
     
-    def _send_pod_deletion(self, target_node, pod_spec):
+    def _send_pod_deletion(self, target_node, pod_data):
         """
         发送Pod删除消息到Kafka
         
         Args:
             target_node: 目标节点名称
-            pod_spec: Pod规格
+            pod_data: Pod数据字典类型
         """
         try:
-            pod_ns = pod_spec.get("metadata", {}).get("namespace", "default")
-            pod_name = pod_spec.get("metadata", {}).get("name")
+            pod_ns = pod_data.get("metadata", {}).get("namespace", "default")
+            pod_name = pod_data.get("metadata", {}).get("name")
             
             # 构造删除消息
             message = {
@@ -157,7 +157,7 @@ class Scheduler:
             }
             
             # 发送到指定节点的topic
-            topic = Config.get_kubelet_topic(target_node)
+            topic = Config.KUBELET_TOPIC.format(node_name=target_node)
             message_json = json.dumps(message)
             
             self.producer.produce(topic, message_json)
@@ -189,33 +189,32 @@ class Scheduler:
         except Exception as e:
             print(f"[ERROR]删除Pod记录失败: {e}")
     
-    def _send_pod_assignment(self, target_node, pod_spec):
+    def _send_pod_assignment(self, target_node, pod_data):
         """
         发送Pod分配消息到Kafka
         
         Args:
             target_node: 目标节点名称
-            pod_spec: Pod规格
+            pod_data: Pod数据字典类型
         """
         try:
             # 构造消息
             message = {
                 "action": "create_pod",
                 "node": target_node,
-                "pod_spec": pod_spec,
+                "pod_data": pod_data,
                 "timestamp": time.time()
             }
             
             # 发送到指定节点的topic
-            # topic = Config.KUBELET_TOPIC.format(node_id=target_node)
-            topic = Config.get_kubelet_topic(target_node)
+            topic = Config.KUBELET_TOPIC.format(node_name=target_node)
             message_json = json.dumps(message)
             
             self.producer.produce(topic, message_json)
             self.producer.flush()  # 确保消息被发送
             
-            pod_ns = pod_spec.get("metadata", {}).get("namespace", "default")
-            pod_name = pod_spec.get("metadata", {}).get("name")
+            pod_ns = pod_data.get("metadata", {}).get("namespace", "default")
+            pod_name = pod_data.get("metadata", {}).get("name")
             print(f"[INFO]Kafka消息已发送: Pod {pod_ns}/{pod_name} -> Topic {topic}")
             
         except Exception as e:

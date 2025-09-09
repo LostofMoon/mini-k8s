@@ -23,6 +23,8 @@ conda activate k8s; python submit_pod.py --config testFile/pod-2.yaml --wait
 python kubectl.py get pods
 python kubectl.py apply -f testFile/pod-1.yaml
 python kubectl.py apply -f testFile/pod-2.yaml
+python kubectl.py apply -f testFile/pod-3.yaml
+python kubectl.py apply -f testFile/pod-4.yaml
 python kubectl.py delete pod pod4 
 
 ### 0. 检查API Server状态

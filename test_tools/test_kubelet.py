@@ -61,7 +61,7 @@ def test_kubelet_integration():
     }
     
     # 通过Kubelet创建Pod
-    success = kubelet.create_pod(test_pod_yaml)
+    success = kubelet.create_pod_directly(test_pod_yaml)
     if success:
         print("   ✅ Pod创建成功")
         
@@ -97,7 +97,7 @@ def test_kubelet_integration():
     
     # 6. 测试Pod删除
     print("\n6. 测试Pod删除...")
-    success = kubelet.delete_pod("default", "test-kubelet-pod")
+    success = kubelet.delete_pod_directly("default", "test-kubelet-pod")
     if success:
         print("   ✅ Pod删除成功")
         
@@ -154,7 +154,7 @@ def test_kubelet_basic():
     }
     
     # 创建Pod
-    success = kubelet.create_pod(test_pod)
+    success = kubelet.create_pod_directly(test_pod)
     if success:
         print("✅ Pod创建成功")
         
@@ -163,7 +163,7 @@ def test_kubelet_basic():
         print(f"Pod状态: {status}")
         
         # 删除Pod
-        success = kubelet.delete_pod("default", "basic-test-pod")
+        success = kubelet.delete_pod_directly("default", "basic-test-pod")
         if success:
             print("✅ Pod删除成功")
         

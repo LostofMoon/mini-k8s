@@ -19,7 +19,8 @@ class Etcd:
         return [pickle.loads(value) if value else None
             for value, metadata in range_response]
 
-    def get(self, key, ret_meta = False):
+    def get(self, key):
+        # (value, metadata)
         value, metadata = self.etcd.get(key)
         return pickle.loads(value) if value else None
 

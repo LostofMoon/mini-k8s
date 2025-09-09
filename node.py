@@ -4,46 +4,23 @@ import time
 from uuid import uuid1
 
 from config import Config
+from kubelet import Kubelet
 
 class Node:
     def __init__(self, arg):
-        self.id = str(uuid1())
-
-        metadata = arg.get("metadata")
-        self.name = metadata.get("name")
-        
-        # 尝试获取apiserver配置，如果没有则使用默认值
-        api_server_config = metadata.get("api-server")
-        if api_server_config and isinstance(api_server_config, dict):
-            self.apiserver = api_server_config.get("ip", "localhost")
-        else:
-            self.apiserver = "localhost"
-
-        spec = arg.get("spec")
-        self.subnet_ip = spec.get("podCIDR")
-        self.taints = spec.get("taints")
-
-        # Kafka配置 - 直接使用配置文件中的默认值
+        self.json = arg
         self.kafka_bootstrap_servers = Config.KAFKA_BOOTSTRAP_SERVERS
 
-        self.json = arg
+        self.id = str(uuid1())
+        metadata = arg.get("metadata")
+        self.name = metadata.get("name")
+        spec = arg.get("spec", {})
+        status = arg.get("status", {})
 
         # 运行时状态
-        
         self.kubelet = None
-
-        # TODO: 组件引用（暂时为None，后续完善时再启用）
-        self.service_proxy = None
+        self.service_proxy = None # TODO: 组件引用（暂时为None，后续完善时再启用）
         
-    def kubelet_config_args(self):
-        """返回kubelet配置参数"""
-        return {
-            "subnet_ip": self.subnet_ip,
-            "apiserver": self.apiserver,
-            "node_id": self.id,
-            "kafka_bootstrap_servers": self.kafka_bootstrap_servers
-        }
-
     def run(self):
         """启动节点并注册到ApiServer"""
         print(f"[INFO]Starting Node: {self.name}")
@@ -62,34 +39,19 @@ class Node:
             print(f"[ERROR]Cannot register to ApiServer with code {register_response.status_code}: {register_response.text}")
             return
         
-        # 启动组件
-        self._start_kubelet()
+        # 创建并启动Kubelet
+        try:
+            self.kubelet = Kubelet(self.name, self.kafka_bootstrap_servers)
+            self.kubelet.start()
+            print(f"[INFO]Kubelet started on node {self.name}")
+        except Exception as e:
+            print(f"[ERROR]Failed to start Kubelet: {e}")
+            self.kubelet = None
         
         # TODO: 后续实现
         # self._start_service_proxy()
         
         print(f"[INFO]Node {self.name} is running")
-    
-    def _start_kubelet(self):
-        """启动Kubelet组件"""
-        try:
-            from kubelet import Kubelet
-            
-            # 构建Kubelet配置，创建并启动Kubelet
-            kubelet_config = {
-                "node_id": self.name,
-                "apiserver": self.apiserver,
-                "subnet_ip": self.subnet_ip,
-                "kafka_bootstrap_servers": self.kafka_bootstrap_servers
-            }
-            self.kubelet = Kubelet(kubelet_config)
-            self.kubelet.start()
-            
-            print(f"[INFO]Kubelet started on node {self.name}")
-            
-        except Exception as e:
-            print(f"[ERROR]Failed to start Kubelet: {e}")
-            self.kubelet = None
     
     def stop(self):
         """停止节点及其组件"""

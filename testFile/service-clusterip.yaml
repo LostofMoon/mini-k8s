@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-world-service
+  namespace: default
+  labels:
+    app: hello-world
+spec:
+  type: ClusterIP
+  selector:
+    app: hello-world
+  ports:
+  - name: http
+    port: 80 # service在集群内部暴露的端口
+    targetPort: 9090 # pod实际暴露的端口
+    protocol: TCP
+

@@ -2,9 +2,7 @@ apiVersion: v1
 kind: Node
 metadata:
   name: node-01  # 节点的名称
-  api-server:
-    ip: localhost
-    port: 8090
+  
   labels:
     kubernetes.io/hostname: node-01  # 节点的主机名标签
     node-role.kubernetes.io/worker: "true"  # 自定义节点角色标签
@@ -12,7 +10,6 @@ metadata:
     example.com/custom-annotation: "value"  # 自定义注解
 
 spec:
-  podCIDR: 10.244.0.0/24  # 节点分配的子网
   taints:  # 污点，用于限制 Pod 调度
     - key: "gpu"
       value: "nvidia"

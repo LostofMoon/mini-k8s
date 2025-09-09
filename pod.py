@@ -95,57 +95,7 @@ class Pod:
             print(f"[ERROR]Docker client connection failed: {e}")
             raise Exception(f"Docker is required but not available: {e}")
     
-    def create(self):
-        """
-        创建Pod - 对应ApiServer的POST /api/v1/namespaces/<namespace>/pods/<name>
-        发送Pod配置到ApiServer进行创建，同时创建真实的Docker容器
-        """
-        print(f"[INFO]Creating Pod {self.namespace}:{self.name} via ApiServer")
-        
-        try:
-            # 1. 首先向ApiServer注册Pod
-            url = f"{self.base_url}{Config.POD_SPEC_URL.format(namespace=self.namespace, name=self.name)}"
-            
-            # 准备Pod规格数据
-            pod_spec = self.json.copy()
-            if "metadata" not in pod_spec:
-                pod_spec["metadata"] = {}
-            pod_spec["metadata"]["uid"] = self.id
-            
-            # 添加节点信息和状态信息
-            if self.node_name:
-                pod_spec["node"] = self.node_name
-            pod_spec["status"] = self.status
-            
-            # 发送POST请求到ApiServer
-            response = requests.post(url, json=pod_spec, timeout=10)
-            
-            if response.status_code not in [200, 201]:
-                if response.status_code == 409:
-                    print(f"[WARNING]Pod {self.namespace}:{self.name} already exists in ApiServer")
-                else:
-                    print(f"[ERROR]Failed to register Pod to ApiServer: {response.status_code} - {response.text}")
-                    return False
-            
-            print(f"[INFO]Pod {self.namespace}:{self.name} registered to ApiServer successfully")
-            
-            # 2. 创建真实的Docker容器
-            if not self._create_docker_containers():
-                print(f"[ERROR]Failed to create Docker containers for Pod")
-                return False
-            
-            self.status = Config.POD_STATUS_RUNNING
-            print(f"[INFO]Pod {self.namespace}:{self.name} created successfully")
-            return True
-                
-        except requests.exceptions.ConnectionError as e:
-            print(f"[ERROR]Cannot connect to ApiServer at {self.base_url}: {e}")
-            return False
-        except Exception as e:
-            print(f"[ERROR]Failed to create Pod: {e}")
-            return False
-    
-    def create_containers_only(self):
+    def create_containers(self):
         """
         仅创建Docker容器，不向ApiServer注册Pod
         这个方法专门供Kubelet使用，因为Pod已经通过调度器注册到ApiServer了
