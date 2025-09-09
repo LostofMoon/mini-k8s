@@ -35,6 +35,7 @@ class ApiServer:
         self.app.route(Config.POD_SPEC_URL_F, methods=["GET"])(self.get_pod)
         self.app.route(Config.POD_SPEC_URL_F, methods=["PUT"])(self.update_pod)
         self.app.route(Config.POD_SPEC_URL_F, methods=["DELETE"])(self.delete_pod)
+        self.app.route(Config.POD_SPEC_URL_F + "/remove", methods=["DELETE"])(self.remove_pod)
         self.app.route(Config.PODS_URL_F, methods=["GET"])(self.get_pods_in_namespace)
         self.app.route(Config.GLOBAL_PODS_URL_F, methods=["GET"])(self.get_all_pods)
         
@@ -236,16 +237,35 @@ class ApiServer:
             return jsonify({"error": str(e)}), 500
     
     def delete_pod(self, namespace: str, name: str):
-        """删除Pod"""
+        """删除Pod - 标记为删除状态，让调度器处理实际删除"""
         try:
             existing_pod = self.etcd.get(Config.POD_SPEC_KEY.format(namespace=namespace, pod_name=name))
             if not existing_pod:
                 return jsonify({"error": f"Pod {namespace}/{name} not found"}), 404
             
+            # 标记Pod为删除状态，而不是立即删除
+            existing_pod["status"] = "DELETING"
+            existing_pod["metadata"]["deletionTimestamp"] = time()
+            
+            # 更新Pod状态到etcd
+            self.etcd.put(Config.POD_SPEC_KEY.format(namespace=namespace, pod_name=name), existing_pod)
+            
+            return jsonify({"message": f"Pod {namespace}/{name} marked for deletion"})
+            
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    
+    def remove_pod(self, namespace: str, name: str):
+        """真正删除Pod记录（由调度器调用）"""
+        try:
+            existing_pod = self.etcd.get(Config.POD_SPEC_KEY.format(namespace=namespace, pod_name=name))
+            if not existing_pod:
+                return jsonify({"message": f"Pod {namespace}/{name} already removed"}), 200
+            
             # 从etcd删除
             self.etcd.delete(Config.POD_SPEC_KEY.format(namespace=namespace, pod_name=name))
             
-            return jsonify({"message": f"Pod {namespace}/{name} deleted"})
+            return jsonify({"message": f"Pod {namespace}/{name} removed from etcd"})
             
         except Exception as e:
             return jsonify({"error": str(e)}), 500

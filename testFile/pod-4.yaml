@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod4
+  namespace: default
+  labels:
+    app: hello-world
+spec:
+  containers:
+  - name: pod4-container1
+    image: registry.cn-hangzhou.aliyuncs.com/tanjunchen/network-multitool:v1
+    command: ["sh", "-c"]
+    args: ["echo 'Hello, Kubernetes! I am pod4-container1' && sleep 3600"]
+    ports:
+    - containerPort: 8080
+      protocol: TCP
+    - containerPort: 8084
+      hostPort: 8084
+      protocol: UDP
+    resources:
+      requests:
+        cpu: 1
+        memory: 134217728
+      limits:
+        cpu: 2
+        memory: 268435456

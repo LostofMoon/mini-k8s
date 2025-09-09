@@ -318,6 +318,12 @@ class Kubelet:
                             self._handle_create_pod_from_kafka(pod_spec)
                         else:
                             print("[ERROR]Pod spec missing in Kafka message")
+                    elif action == "delete_pod":
+                        pod_info = message_data.get("pod_info")
+                        if pod_info:
+                            self._handle_delete_pod_from_kafka(pod_info)
+                        else:
+                            print("[ERROR]Pod info missing in delete Kafka message")
                     else:
                         print(f"[WARN]Unknown action in Kafka message: {action}")
                         
@@ -374,6 +380,46 @@ class Kubelet:
                 
         except Exception as e:
             print(f"[ERROR]Failed to process Pod creation from Kafka: {e}")
+            return False
+    
+    def _handle_delete_pod_from_kafka(self, pod_info):
+        """
+        处理从Kafka接收的删除Pod消息
+        
+        Args:
+            pod_info: Pod删除信息，包含namespace和name
+            
+        Returns:
+            bool: 删除是否成功
+        """
+        try:
+            pod_namespace = pod_info.get("namespace", "default")
+            pod_name = pod_info.get("name")
+            
+            if not pod_name:
+                print("[ERROR]Pod name is required for deletion")
+                return False
+            
+            pod_key = f"{pod_namespace}/{pod_name}"
+            
+            print(f"[INFO]Processing Pod deletion from Kafka: {pod_key}")
+            
+            # 检查Pod是否存在
+            if pod_key not in self.pods_cache:
+                print(f"[WARNING]Pod {pod_key} not found on this node, ignoring delete request")
+                return True
+            
+            # 删除Pod
+            success = self.delete_pod(pod_namespace, pod_name)
+            if success:
+                print(f"[INFO]Pod {pod_key} deleted successfully on node {self.node_id} via Kafka")
+                return True
+            else:
+                print(f"[ERROR]Failed to delete Pod {pod_key} via Kafka")
+                return False
+                
+        except Exception as e:
+            print(f"[ERROR]Failed to process Pod deletion from Kafka: {e}")
             return False
 
 

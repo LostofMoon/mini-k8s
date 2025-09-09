@@ -19,6 +19,12 @@ python pod.py --config testFile/pod-3.yaml --action create
 conda activate k8s; python submit_pod.py --config testFile/pod-1.yaml --wait
 conda activate k8s; python submit_pod.py --config testFile/pod-2.yaml --wait
 
+#（删除是有一定延迟）
+python kubectl.py get pods
+python kubectl.py apply -f testFile/pod-1.yaml
+python kubectl.py apply -f testFile/pod-2.yaml
+python kubectl.py delete pod pod4 
+
 ### 0. 检查API Server状态
 curl http://localhost:5050/api/v1/nodes
 curl http://localhost:5050/api/v1/pods
@@ -39,9 +45,10 @@ docker exec default_pod1_pod1-container1 ip addr show
 docker exec default_pod2_pod2-container1 ip addr show
 docker exec default_pod3_pod3-container1 ip addr show
 
-## 关闭原先的消息队列
+## kafuka
+### 0. 关闭原先的消息队列
 docker compose -f docker-compose-kafka.yml down
-## 启动消息队列
+### 1. 启动消息队列
 docker compose -f docker-compose-kafka.yml up -d
-## 看有什么topic
+### 2. 看有什么topic
 docker exec mini-k8s-kafka-1 kafka-topics.sh --list --bootstrap-server localhost:9092

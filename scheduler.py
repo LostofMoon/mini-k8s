@@ -50,6 +50,10 @@ class Scheduler:
                 print("[WARN]无可用Node，跳过本轮调度")
                 time.sleep(self.interval)
                 continue
+                
+            # 处理删除的Pod
+            self._handle_pod_deletions(pods)
+            
             # 过滤未绑定节点的Pod
             unscheduled = [p for p in pods if not p.get("node") or p.get("node") == ""]
             
@@ -98,6 +102,92 @@ class Scheduler:
                     except Exception as e:
                         print(f"[ERROR]调度Pod失败: {e}")
             time.sleep(self.interval)
+    
+    def _handle_pod_deletions(self, pods):
+        """
+        处理标记为删除的Pod
+        
+        Args:
+            pods: 所有Pod的列表
+        """
+        # 查找标记为删除的Pod（status为"DELETING"或有deletionTimestamp的Pod）
+        pods_to_delete = []
+        for pod in pods:
+            # 检查删除标记
+            if pod.get("status") == "DELETING":
+                pods_to_delete.append(pod)
+            elif pod.get("metadata", {}).get("deletionTimestamp"):
+                pods_to_delete.append(pod)
+        
+        if pods_to_delete:
+            print(f"[INFO]发现 {len(pods_to_delete)} 个待删除Pod")
+            
+        for pod in pods_to_delete:
+            pod_ns = pod.get("metadata", {}).get("namespace", "default")
+            pod_name = pod.get("metadata", {}).get("name")
+            target_node = pod.get("node")
+            
+            if target_node:
+                print(f"[INFO]发送删除消息: Pod {pod_ns}/{pod_name} -> Node {target_node}")
+                self._send_pod_deletion(target_node, pod)
+            else:
+                print(f"[WARNING]Pod {pod_ns}/{pod_name} 未分配到节点，跳过删除通知")
+    
+    def _send_pod_deletion(self, target_node, pod_spec):
+        """
+        发送Pod删除消息到Kafka
+        
+        Args:
+            target_node: 目标节点名称
+            pod_spec: Pod规格
+        """
+        try:
+            pod_ns = pod_spec.get("metadata", {}).get("namespace", "default")
+            pod_name = pod_spec.get("metadata", {}).get("name")
+            
+            # 构造删除消息
+            message = {
+                "action": "delete_pod",
+                "node": target_node,
+                "pod_info": {
+                    "namespace": pod_ns,
+                    "name": pod_name
+                },
+                "timestamp": time.time()
+            }
+            
+            # 发送到指定节点的topic
+            topic = Config.get_kubelet_topic(target_node)
+            message_json = json.dumps(message)
+            
+            self.producer.produce(topic, message_json)
+            self.producer.flush()  # 确保消息被发送
+            
+            print(f"[INFO]Kafka删除消息已发送: Pod {pod_ns}/{pod_name} -> Topic {topic}")
+            
+            # 发送消息后，立即从etcd删除Pod记录
+            self._remove_pod_from_etcd(pod_ns, pod_name)
+            
+        except Exception as e:
+            print(f"[ERROR]发送Kafka删除消息失败: {e}")
+    
+    def _remove_pod_from_etcd(self, namespace, pod_name):
+        """
+        从etcd中删除Pod记录
+        
+        Args:
+            namespace: Pod命名空间
+            pod_name: Pod名称
+        """
+        try:
+            url = f"{self.base_url}/api/v1/namespaces/{namespace}/pods/{pod_name}/remove"
+            resp = requests.delete(url, timeout=3)
+            if resp.status_code == 200:
+                print(f"[INFO]Pod {namespace}/{pod_name} 记录已从etcd删除")
+            else:
+                print(f"[WARNING]删除Pod记录失败: {resp.status_code} {resp.text}")
+        except Exception as e:
+            print(f"[ERROR]删除Pod记录失败: {e}")
     
     def _send_pod_assignment(self, target_node, pod_spec):
         """
