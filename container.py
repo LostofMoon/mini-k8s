@@ -72,7 +72,6 @@ class Container:
         # 命令和参数
         if self.command:
             if self.args:
-                # 如果有command和args，组合它们
                 full_command = self.command + self.args
                 args["command"] = full_command
             else:
@@ -257,7 +256,7 @@ class Container:
             # 映射Docker状态到我们的状态
             status_mapping = {
                 "running": "Running",
-                "exited": "Stopped",
+                "exited": "Stopped", 
                 "created": "Created",
                 "restarting": "Running",
                 "removing": "Deleting",
@@ -268,6 +267,11 @@ class Container:
             self.status = status_mapping.get(docker_status, "Unknown")
             return self.status
             
+        except docker.errors.NotFound:
+            # 容器已被删除
+            self.status = "Deleted"
+            self.docker_container = None
+            return self.status
         except Exception as e:
             print(f"[ERROR]Failed to get container status for {self.container_name}: {e}")
             return "Unknown"

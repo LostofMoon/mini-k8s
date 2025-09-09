@@ -144,15 +144,10 @@ class Pod:
                     pause_container.start()
             else:
                 print(f"[INFO]Creating pause container: {pause_name}")
+                
+                # 收集所有容器的端口配置
+                pause_ports = {}
                 for container in self.containers:
-                    pause_args = {
-                        "name": pause_name, # TODO: 这里应该是容器的name
-                        "image": container.image,
-                        "command": container.command + container.args,
-                        "detach": True,
-                        "remove": False
-                    }
-                    pause_ports = {}
                     if container.ports:
                         for port_config in container.ports:
                             container_port = port_config.get("containerPort")
@@ -162,7 +157,21 @@ class Pod:
                                 port_key = f"{container_port}/{protocol}"
                                 if host_port:
                                     pause_ports[port_key] = host_port
-                        pause_args["ports"] = pause_ports
+                                else:
+                                    pause_ports[port_key] = None
+                
+                # 创建pause容器参数
+                pause_args = {
+                    "image": "busybox:latest",
+                    "name": pause_name,
+                    "command": ["sh", "-c", "echo '[INFO]Pod network init' && sleep 3600"],
+                    "detach": True,
+                    "remove": False
+                }
+                
+                # 如果有端口配置，添加到参数中
+                if pause_ports:
+                    pause_args["ports"] = pause_ports
                 
                 pause_container = self.docker_client.containers.run(**pause_args)
                 
