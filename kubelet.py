@@ -91,6 +91,7 @@ class Kubelet:
         print(f"[INFO]Kubelet stopped")
 
      # 更新etcd中pods状态
+    
     def _report_pod_status(self, pod):
         try:
             # 构建状态更新URL

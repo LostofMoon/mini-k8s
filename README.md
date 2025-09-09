@@ -19,7 +19,7 @@ python pod.py --config testFile/pod-3.yaml --action create
 conda activate k8s; python submit_pod.py --config testFile/pod-1.yaml --wait
 conda activate k8s; python submit_pod.py --config testFile/pod-2.yaml --wait
 
-#（删除是有一定延迟）
+### NEW（删除是有一定延迟）
 python kubectl.py get pods
 python kubectl.py apply -f testFile/pod-1.yaml
 python kubectl.py apply -f testFile/pod-2.yaml
