@@ -1,7 +1,7 @@
 class Config:
 #---------------------------------------------------------------------------------------
-    # HOST = 'localhost'
-    HOST = "10.119.15.182"  # server
+    HOST = 'localhost'
+    # HOST = "10.119.15.182"  # server
 
     ETCD_PORT = "2379"
     SERVER_PORT = "5050"

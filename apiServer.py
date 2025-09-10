@@ -10,7 +10,8 @@ from service import Service
 class ApiServer:
     def __init__(self):
         print("[INFO]ApiServer Init...")
-        self.etcd = Etcd(host = Config.HOST, port =  Config.ETCD_PORT)
+        self.etcd = Etcd(host = "0.0.0.0", port =  Config.ETCD_PORT)
+        # self.etcd = Etcd(host = Config.HOST, port =  Config.ETCD_PORT)
         self.app = Flask(__name__)
 
         self.etcd.reset()
