@@ -1,3 +1,6 @@
+## Etcd
+docker run -d --name etcd -p 2379:2379 -p 2380:2380 quay.io/coreos/etcd:v3.5.0 /usr/local/bin/etcd --listen-client-urls http://0.0.0.0:2379 --advertise-client-urls http://localhost:2379
+
 ## ApiServer
 conda activate k8s; python apiServer.py
 
