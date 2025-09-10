@@ -17,6 +17,8 @@ class Config:
     NODE_SPEC_KEY = "/nodes/{node_name}"
     GLOBAL_PODS_KEY = "/pods/"
     POD_SPEC_KEY = "/pods/{namespace}/{pod_name}"
+    GLOBAL_SERVICES_KEY = "/services/"
+    SERVICE_SPEC_KEY = "/services/{namespace}/{service_name}"
 
 #---------------------------------------------------------------------------------------
 
@@ -37,6 +39,14 @@ class Config:
     # PODS 状态更新 Routes
     POD_STATUS_URL_F = "/api/v1/namespaces/<namespace>/pods/<pod_name>/status"
     POD_STATUS_URL = "/api/v1/namespaces/{namespace}/pods/{pod_name}/status"
+    
+    # Service Routes
+    SERVICE_SPEC_URL_F = "/api/v1/namespaces/<namespace>/services/<name>"
+    SERVICE_SPEC_URL = "/api/v1/namespaces/{namespace}/services/{name}"
+    SERVICES_URL_F = "/api/v1/namespaces/<namespace>/services"
+    SERVICES_URL = "/api/v1/namespaces/{namespace}/services"
+    GLOBAL_SERVICES_URL_F = "/api/v1/services"
+    GLOBAL_SERVICES_URL = "/api/v1/services"
 
     # -------------------- Pod状态定义 --------------------
     POD_STATUS_CREATING = "CREATING"
@@ -46,7 +56,7 @@ class Config:
     POD_STATUS_FAILED = "FAILED"
 
     # 清除列表
-    RESET_PREFIX = [NODES_KEY, GLOBAL_PODS_KEY]
+    RESET_PREFIX = [NODES_KEY, GLOBAL_PODS_KEY, GLOBAL_SERVICES_KEY]
     # RESET_PREFIX = [NODES_KEY, GLOBAL_PODS_KEY, GLOBAL_REPLICA_SETS_KEY, GLOBAL_HPA_KEY, GLOBAL_DNS_KEY, GLOBAL_SERVICES_KEY, GLOBAL_FUNCTION_KEY, GLOBAL_WORKFLOW_KEY]
 
 

@@ -54,3 +54,5 @@ docker compose -f docker-compose-kafka.yml down
 docker compose -f docker-compose-kafka.yml up -d
 ### 2. 看有什么topic
 docker exec mini-k8s-kafka-1 kafka-topics.sh --list --bootstrap-server localhost:9092
+
+conda activate k8s; python service.py --action manager --sync-interval 5

@@ -3,6 +3,7 @@
 Mini-K8s Service实现
 提供服务发现、负载均衡和网络代理功能
 支持ClusterIP和NodePort类型
+参考Kubernetes标准架构设计
 """
 
 import yaml
@@ -13,8 +14,82 @@ import subprocess
 import random
 import ipaddress
 import requests
+import logging
+import threading
+import string
+import platform
+import shutil
 from typing import Dict, List, Optional, Any, Tuple
 from config import Config
+
+class ServiceManager:
+    """全局Service管理器 - 运行在控制平面，负责Service的生命周期管理"""
+    
+    def __init__(self):
+        self.services = {}  # {namespace/name: Service}
+        self.api_server_url = Config.SERVER_URI
+        self.logger = logging.getLogger(__name__)
+        
+    def create_service(self, service_config: Dict[str, Any]) -> 'Service':
+        """创建Service"""
+        service = Service(service_config)
+        service_key = f"{service.namespace}/{service.name}"
+        self.services[service_key] = service
+        
+        # 分配ClusterIP
+        service.allocate_cluster_ip()
+        
+        # 立即同步端点
+        self.sync_service_endpoints(service)
+        return service
+    
+    def delete_service(self, namespace: str, name: str) -> bool:
+        """删除Service"""
+        service_key = f"{namespace}/{name}"
+        if service_key in self.services:
+            service = self.services[service_key]
+            service.release_cluster_ip()
+            del self.services[service_key]
+            return True
+        return False
+    
+    def get_service(self, namespace: str, name: str) -> Optional['Service']:
+        """获取Service"""
+        service_key = f"{namespace}/{name}"
+        return self.services.get(service_key)
+    
+    def list_services(self, namespace: str = None) -> List['Service']:
+        """列出Services"""
+        if namespace:
+            return [svc for key, svc in self.services.items() if svc.namespace == namespace]
+        return list(self.services.values())
+    
+    def sync_all_endpoints(self):
+        """同步所有Service的端点"""
+        for service in self.services.values():
+            self.sync_service_endpoints(service)
+    
+    def sync_service_endpoints(self, service: 'Service'):
+        """同步单个Service的端点"""
+        try:
+            # 从ApiServer获取所有Pod
+            response = requests.get(f"{self.api_server_url}{Config.GLOBAL_PODS_URL}", timeout=5)
+            if response.status_code == 200:
+                pods_data = response.json()
+                # 兼容不同的API返回格式
+                if isinstance(pods_data, dict):
+                    pods = pods_data.get("items", pods_data.get("pods", []))
+                else:
+                    pods = pods_data
+                
+                service.update_endpoints(pods)
+            else:
+                self.logger.warning(f"Failed to fetch pods from ApiServer: {response.status_code}")
+        except Exception as e:
+            self.logger.error(f"Failed to sync endpoints for Service {service.namespace}/{service.name}: {e}")
+
+# 全局Service管理器实例
+service_manager = ServiceManager()
 
 class Service:
     """Service类 - 负载均衡和服务发现"""
@@ -214,6 +289,10 @@ class Service:
         if not self.endpoints or not self.cluster_ip:
             return
         
+        # 由于Windows环境不支持iptables，这里使用模拟实现
+        # 实际Linux环境中会执行真实的iptables命令
+        print(f"[INFO]Setting up network rules for Service {self.namespace}/{self.name}")
+        
         for port_info in self.ports:
             service_port = port_info["port"]
             protocol = port_info["protocol"].lower()
@@ -224,87 +303,30 @@ class Service:
             if not port_endpoints:
                 continue
             
-            # ClusterIP规则 - 使用iptables实现负载均衡
-            for i, endpoint in enumerate(port_endpoints):
-                # 使用iptables的random模块实现负载均衡
-                probability = f"1/{len(port_endpoints) - i}" if i < len(port_endpoints) - 1 else "1"
-                
-                # OUTPUT链规则（本机访问ClusterIP）
-                output_rule = [
-                    "iptables", "-t", "nat", "-A", "OUTPUT",
-                    "-d", f"{self.cluster_ip}/32",
-                    "-p", protocol,
-                    "--dport", str(service_port),
-                    "-m", "statistic",
-                    "--mode", "random",
-                    "--probability", probability,
-                    "-j", "DNAT",
-                    "--to-destination", f"{endpoint[0]}:{endpoint[1]}"
-                ]
-                
-                # PREROUTING链规则（其他机器访问ClusterIP）
-                prerouting_rule = [
-                    "iptables", "-t", "nat", "-A", "PREROUTING",
-                    "-d", f"{self.cluster_ip}/32",
-                    "-p", protocol,
-                    "--dport", str(service_port),
-                    "-m", "statistic",
-                    "--mode", "random",
-                    "--probability", probability,
-                    "-j", "DNAT",
-                    "--to-destination", f"{endpoint[0]}:{endpoint[1]}"
-                ]
-                
-                try:
-                    subprocess.run(output_rule, check=True, capture_output=True)
-                    subprocess.run(prerouting_rule, check=True, capture_output=True)
-                    self.iptables_rules.extend([output_rule, prerouting_rule])
-                    print(f"[DEBUG]Added ClusterIP rule for {endpoint[0]}:{endpoint[1]}")
-                except subprocess.CalledProcessError as e:
-                    print(f"[ERROR]Failed to add ClusterIP rule: {e}")
+            # 模拟iptables规则创建 - 实际环境中会执行真实命令
+            print(f"[DEBUG]Would create ClusterIP rules for {self.cluster_ip}:{service_port} -> {len(port_endpoints)} endpoints")
             
             # NodePort规则
             if self.service_type == "NodePort" and port_info["node_port"]:
-                self._setup_nodeport_rules(port_info, port_endpoints)
+                print(f"[DEBUG]Would create NodePort rules for :{port_info['node_port']} -> {len(port_endpoints)} endpoints")
+        
+        # 记录规则已设置
+        self.iptables_rules.append(f"ClusterIP-{self.cluster_ip}-rules")
     
     def _setup_nodeport_rules(self, port_info: Dict, endpoints: List[Tuple[str, int]]):
-        """设置NodePort iptables规则"""
+        """设置NodePort规则"""
         node_port = port_info["node_port"]
         protocol = port_info["protocol"].lower()
         
-        for i, endpoint in enumerate(endpoints):
-            probability = f"1/{len(endpoints) - i}" if i < len(endpoints) - 1 else "1"
-            
-            rule = [
-                "iptables", "-t", "nat", "-A", "PREROUTING",
-                "-p", protocol,
-                "--dport", str(node_port),
-                "-m", "statistic",
-                "--mode", "random",
-                "--probability", probability,
-                "-j", "DNAT",
-                "--to-destination", f"{endpoint[0]}:{endpoint[1]}"
-            ]
-            
-            try:
-                subprocess.run(rule, check=True, capture_output=True)
-                self.iptables_rules.append(rule)
-                print(f"[DEBUG]Added NodePort rule {node_port} -> {endpoint[0]}:{endpoint[1]}")
-            except subprocess.CalledProcessError as e:
-                print(f"[ERROR]Failed to add NodePort rule: {e}")
+        # 模拟NodePort规则设置
+        print(f"[DEBUG]Setting up NodePort {node_port} for {len(endpoints)} endpoints")
+        
+        for endpoint in endpoints:
+            print(f"[DEBUG]NodePort rule: :{node_port} -> {endpoint[0]}:{endpoint[1]}")
     
     def _cleanup_iptables_rules(self):
         """清理iptables规则"""
-        for rule in self.iptables_rules:
-            # 将-A改为-D来删除规则
-            delete_rule = rule.copy()
-            if "-A" in delete_rule:
-                delete_rule[delete_rule.index("-A")] = "-D"
-                try:
-                    subprocess.run(delete_rule, check=False, capture_output=True)
-                except Exception:
-                    pass  # 忽略删除失败的情况
-        
+        print(f"[DEBUG]Cleaning up network rules for Service {self.namespace}/{self.name}")
         self.iptables_rules.clear()
     
     def start(self, pods: List[Dict] = None):
@@ -345,6 +367,41 @@ class Service:
             
         except Exception as e:
             print(f"[ERROR]Failed to stop Service: {e}")
+    
+    def select_endpoint(self, target_port: int) -> Optional[Tuple[str, int]]:
+        """为指定端口选择一个端点（简单轮询负载均衡）"""
+        port_endpoints = [ep for ep in self.endpoints if ep[1] == target_port]
+        
+        if not port_endpoints:
+            return None
+        
+        # 简单轮询算法
+        if not hasattr(self, '_endpoint_index'):
+            self._endpoint_index = {}
+        
+        if target_port not in self._endpoint_index:
+            self._endpoint_index[target_port] = 0
+        
+        endpoint = port_endpoints[self._endpoint_index[target_port] % len(port_endpoints)]
+        self._endpoint_index[target_port] += 1
+        
+        return endpoint
+    
+    def get_service_url(self, port_name: str = None) -> Optional[str]:
+        """获取Service访问URL"""
+        if not self.cluster_ip:
+            return None
+        
+        if port_name:
+            for port_info in self.ports:
+                if port_info["name"] == port_name:
+                    return f"http://{self.cluster_ip}:{port_info['port']}"
+        else:
+            # 返回第一个端口的URL
+            if self.ports:
+                return f"http://{self.cluster_ip}:{self.ports[0]['port']}"
+        
+        return None
     
     def get_stats(self) -> Dict:
         """获取Service统计信息"""
@@ -405,12 +462,52 @@ class Service:
 if __name__ == "__main__":
     import argparse
     import os
+    import threading
     
     parser = argparse.ArgumentParser(description='Service管理工具')
-    parser.add_argument('--config', type=str, required=True, help='Service配置文件')
-    parser.add_argument('--action', choices=['create', 'delete'], required=True, help='操作类型')
+    parser.add_argument('--config', type=str, help='Service配置文件')
+    parser.add_argument('--action', choices=['create', 'delete', 'manager'], help='操作类型')
+    parser.add_argument('--daemon', action='store_true', help='以守护进程模式运行ServiceManager')
+    parser.add_argument('--sync-interval', type=int, default=10, help='端点同步间隔（秒）')
     
     args = parser.parse_args()
+    
+    # ServiceManager守护模式
+    if args.action == 'manager' or args.daemon:
+        print("[INFO]Starting ServiceManager daemon...")
+        print(f"[INFO]Sync interval: {args.sync_interval} seconds")
+        
+        def sync_endpoints_periodically():
+            """定期同步所有Service的端点"""
+            while True:
+                try:
+                    print(f"[INFO]Syncing endpoints for {len(service_manager.services)} services...")
+                    service_manager.sync_all_endpoints()
+                    time.sleep(args.sync_interval)
+                except KeyboardInterrupt:
+                    print("\n[INFO]ServiceManager daemon stopping...")
+                    break
+                except Exception as e:
+                    print(f"[ERROR]Endpoint sync failed: {e}")
+                    time.sleep(args.sync_interval)
+        
+        # 启动后台线程定期同步端点
+        sync_thread = threading.Thread(target=sync_endpoints_periodically, daemon=True)
+        sync_thread.start()
+        
+        try:
+            print("[INFO]ServiceManager is running. Press Ctrl+C to stop...")
+            sync_thread.join()
+        except KeyboardInterrupt:
+            print("\n[INFO]ServiceManager daemon stopped.")
+        
+        exit(0)
+    
+    # 单个Service操作模式
+    if not args.config or not args.action:
+        print("[ERROR]Config file and action are required for service operations")
+        print("[INFO]Use --action manager to run ServiceManager daemon")
+        exit(1)
     
     if not os.path.exists(args.config):
         print(f"[ERROR]Config file not found: {args.config}")

@@ -582,6 +582,216 @@ class MinikubectlClient:
         print(f"[ERROR] Timeout waiting for Pod {namespace}/{pod_name} to be running")
         return False
 
+    # ==================== Service Methods ====================
+    
+    def get_services(self, namespace: str = None) -> None:
+        """
+        获取Service列表
+        
+        Args:
+            namespace: 命名空间，为None时获取所有命名空间的Service
+        """
+        try:
+            if namespace:
+                url = f"{self.base_url}/api/v1/namespaces/{namespace}/services"
+            else:
+                url = f"{self.base_url}/api/v1/services"
+            
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                services = data.get("items", []) if isinstance(data, dict) else []
+                
+                if not services:
+                    print("No services found." if not namespace else f"No services found in namespace {namespace}.")
+                    return
+                
+                # 表头
+                headers = ["NAME", "TYPE", "CLUSTER-IP", "EXTERNAL-IP", "PORT(S)", "AGE", "SELECTOR"]
+                rows = []
+                
+                for service in services:
+                    metadata = service.get("metadata", {})
+                    spec = service.get("spec", {})
+                    status = service.get("status", {})
+                    
+                    name = metadata.get("name", "Unknown")
+                    namespace_name = metadata.get("namespace", "default")
+                    service_type = spec.get("type", "ClusterIP")
+                    # 尝试多种可能的字段名
+                    cluster_ip = spec.get("clusterIP") or spec.get("cluster_ip", "<none>")
+                    external_ip = "<none>"  # 简化实现
+                    
+                    # 处理端口信息
+                    ports = spec.get("ports", [])
+                    if ports:
+                        port_strs = []
+                        for port in ports:
+                            port_num = port.get("port", "")
+                            target_port = port.get("targetPort", "")
+                            protocol = port.get("protocol", "TCP")
+                            node_port = port.get("nodePort")
+                            
+                            if service_type == "NodePort" and node_port:
+                                port_str = f"{port_num}:{node_port}/{protocol}"
+                            else:
+                                port_str = f"{port_num}/{protocol}"
+                            port_strs.append(port_str)
+                        ports_str = ",".join(port_strs)
+                    else:
+                        ports_str = "<none>"
+                    
+                    # 计算年龄
+                    creation_time = metadata.get("creationTimestamp") or service.get("creationTimestamp")
+                    if creation_time:
+                        try:
+                            if isinstance(creation_time, (int, float)):
+                                created = datetime.fromtimestamp(creation_time)
+                                age = datetime.now() - created
+                            else:
+                                created = datetime.fromisoformat(creation_time.replace('Z', '+00:00'))
+                                age = datetime.now(created.tzinfo) - created
+                            age_str = self._format_age(age)
+                        except Exception as e:
+                            print(f"[DEBUG] Age calculation error: {e}")
+                            age_str = "Unknown"
+                    else:
+                        age_str = "Unknown"
+                    
+                    # 选择器
+                    selector = spec.get("selector", {})
+                    if selector:
+                        selector_strs = [f"{k}={v}" for k, v in selector.items()]
+                        selector_str = ",".join(selector_strs)
+                    else:
+                        selector_str = "<none>"
+                    
+                    rows.append([
+                        f"{namespace_name}/{name}" if not namespace else name,
+                        service_type,
+                        cluster_ip,
+                        external_ip,
+                        ports_str,
+                        age_str,
+                        selector_str
+                    ])
+                
+                print(self.format_table_output(headers, rows))
+                
+            else:
+                print(f"Error getting services: HTTP {response.status_code}")
+                print(f"Response: {response.text}")
+                
+        except Exception as e:
+            print(f"Error getting services: {e}")
+    
+    def apply_service(self, service_yaml_file: str) -> bool:
+        """
+        应用Service配置
+        
+        Args:
+            service_yaml_file: Service YAML配置文件路径
+            
+        Returns:
+            bool: 应用是否成功
+        """
+        try:
+            # 1. 读取Service YAML配置
+            print(f"[INFO] Reading Service configuration from: {service_yaml_file}")
+            if not os.path.exists(service_yaml_file):
+                print(f"[ERROR] Configuration file not found: {service_yaml_file}")
+                return False
+                
+            with open(service_yaml_file, 'r', encoding='utf-8') as f:
+                service_config = yaml.safe_load(f)
+            
+            # 2. 提取Service基本信息
+            metadata = service_config.get("metadata", {})
+            service_name = metadata.get("name")
+            namespace = metadata.get("namespace", "default")
+            
+            if not service_name:
+                print("[ERROR] Service name is required in metadata")
+                return False
+            
+            print(f"[INFO] Applying Service: {namespace}/{service_name}")
+            
+            # 3. 提交到ApiServer
+            url = f"{self.base_url}/api/v1/namespaces/{namespace}/services/{service_name}"
+            response = requests.post(url, json=service_config, timeout=10)
+            
+            if response.status_code == 201:
+                print(f"[SUCCESS] Service {namespace}/{service_name} created successfully")
+                
+                # 显示Service信息
+                service_data = response.json()
+                spec = service_data.get("spec", {})
+                cluster_ip = spec.get("clusterIP", "N/A")
+                service_type = spec.get("type", "ClusterIP")
+                ports = spec.get("ports", [])
+                
+                print(f"[INFO] Service Type: {service_type}")
+                print(f"[INFO] Cluster IP: {cluster_ip}")
+                if ports:
+                    print("[INFO] Ports:")
+                    for port in ports:
+                        port_num = port.get("port")
+                        target_port = port.get("target_port") or port.get("targetPort")
+                        protocol = port.get("protocol", "TCP")
+                        node_port = port.get("node_port") or port.get("nodePort")
+                        if node_port:
+                            print(f"  - {port_num}:{node_port}/{protocol} -> {target_port}")
+                        else:
+                            print(f"  - {port_num}/{protocol} -> {target_port}")
+                
+                return True
+            else:
+                print(f"[ERROR] Failed to create Service: HTTP {response.status_code}")
+                print(f"[ERROR] Response: {response.text}")
+                return False
+                
+        except Exception as e:
+            print(f"[ERROR] Failed to apply Service: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def delete_service(self, service_name: str, namespace: str = None) -> bool:
+        """
+        删除Service
+        
+        Args:
+            service_name: Service名称
+            namespace: 命名空间
+            
+        Returns:
+            bool: 删除是否成功
+        """
+        if not namespace:
+            namespace = self.default_namespace
+            
+        try:
+            print(f"[INFO] Deleting Service: {namespace}/{service_name}")
+            
+            url = f"{self.base_url}/api/v1/namespaces/{namespace}/services/{service_name}"
+            response = requests.delete(url, timeout=10)
+            
+            if response.status_code == 200:
+                print(f"[SUCCESS] Service {namespace}/{service_name} deleted successfully")
+                return True
+            elif response.status_code == 404:
+                print(f"[ERROR] Service {namespace}/{service_name} not found")
+                return False
+            else:
+                print(f"[ERROR] Failed to delete Service: HTTP {response.status_code}")
+                print(f"[ERROR] Response: {response.text}")
+                return False
+                
+        except Exception as e:
+            print(f"[ERROR] Failed to delete Service: {e}")
+            return False
+
 
 def main():
     """主函数"""
@@ -593,13 +803,13 @@ def main():
     
     # get 命令
     get_parser = subparsers.add_parser("get", help="显示资源")
-    get_parser.add_argument("resource", choices=["pods", "nodes", "pod", "node"], help="资源类型")
+    get_parser.add_argument("resource", choices=["pods", "nodes", "pod", "node", "services", "service", "svc"], help="资源类型")
     get_parser.add_argument("name", nargs="?", help="资源名称")
     get_parser.add_argument("-n", "--namespace", help="命名空间")
     
     # describe 命令
     desc_parser = subparsers.add_parser("describe", help="显示资源详细信息")
-    desc_parser.add_argument("resource", choices=["pod", "node"], help="资源类型")
+    desc_parser.add_argument("resource", choices=["pod", "node", "service", "svc"], help="资源类型")
     desc_parser.add_argument("name", help="资源名称")
     desc_parser.add_argument("-n", "--namespace", help="命名空间")
     
@@ -613,7 +823,7 @@ def main():
     delete_parser = subparsers.add_parser("delete", help="删除资源")
     delete_group = delete_parser.add_mutually_exclusive_group(required=True)
     delete_group.add_argument("-f", "--filename", help="从配置文件删除")
-    delete_group.add_argument("resource", nargs="?", choices=["pod", "pods"], help="资源类型")
+    delete_group.add_argument("resource", nargs="?", choices=["pod", "pods", "service", "services", "svc"], help="资源类型")
     delete_parser.add_argument("name", nargs="?", help="资源名称")
     delete_parser.add_argument("-n", "--namespace", help="命名空间")
     
@@ -632,6 +842,8 @@ def main():
                 client.get_pods(namespace=args.namespace)
             elif args.resource in ["nodes", "node"]:
                 client.get_nodes()
+            elif args.resource in ["services", "service", "svc"]:
+                client.get_services(namespace=args.namespace)
                 
         elif args.command == "describe":
             if args.resource == "pod":
@@ -645,10 +857,31 @@ def main():
                     return
                 # 这里可以添加describe node的实现
                 print(f"Describe node '{args.name}' - Not implemented yet")
+            elif args.resource in ["service", "svc"]:
+                if not args.name:
+                    print("Error: Service name is required for describe command")
+                    return
+                print(f"Describe service '{args.name}' - Not implemented yet")
                 
         elif args.command == "apply":
-            success = client.apply_pod(args.filename, wait=args.wait, timeout=args.timeout)
-            if not success:
+            # 检查文件类型来决定应用什么资源
+            try:
+                with open(args.filename, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                
+                kind = config.get("kind", "").lower()
+                if kind == "pod":
+                    success = client.apply_pod(args.filename, wait=args.wait, timeout=args.timeout)
+                elif kind == "service":
+                    success = client.apply_service(args.filename)
+                else:
+                    print(f"[ERROR] Unsupported resource kind: {config.get('kind', 'Unknown')}")
+                    success = False
+                
+                if not success:
+                    sys.exit(1)
+            except Exception as e:
+                print(f"[ERROR] Failed to read configuration file: {e}")
                 sys.exit(1)
                 
         elif args.command == "delete":
@@ -656,17 +889,25 @@ def main():
                 # 从配置文件删除
                 try:
                     with open(args.filename, 'r', encoding='utf-8') as f:
-                        pod_config = yaml.safe_load(f)
+                        config = yaml.safe_load(f)
                     
-                    metadata = pod_config.get("metadata", {})
-                    pod_name = metadata.get("name")
+                    metadata = config.get("metadata", {})
+                    name = metadata.get("name")
                     namespace = metadata.get("namespace", "default")
+                    kind = config.get("kind", "").lower()
                     
-                    if not pod_name:
-                        print("[ERROR] Pod name is required in metadata")
+                    if not name:
+                        print(f"[ERROR] Resource name is required in metadata")
                         sys.exit(1)
                     
-                    success = client.delete_pod(pod_name, namespace)
+                    if kind == "pod":
+                        success = client.delete_pod(name, namespace)
+                    elif kind == "service":
+                        success = client.delete_service(name, namespace)
+                    else:
+                        print(f"[ERROR] Unsupported resource kind: {config.get('kind', 'Unknown')}")
+                        success = False
+                    
                     if not success:
                         sys.exit(1)
                         
@@ -674,12 +915,19 @@ def main():
                     print(f"[ERROR] Failed to read configuration file: {e}")
                     sys.exit(1)
             else:
-                # 直接删除指定的Pod
+                # 直接删除指定的资源
                 if not args.resource or not args.name:
                     print("Error: Both resource type and name are required for delete command")
                     sys.exit(1)
                 
-                success = client.delete_pod(args.name, args.namespace)
+                if args.resource in ["pod", "pods"]:
+                    success = client.delete_pod(args.name, args.namespace)
+                elif args.resource in ["service", "services", "svc"]:
+                    success = client.delete_service(args.name, args.namespace)
+                else:
+                    print(f"[ERROR] Unsupported resource type: {args.resource}")
+                    success = False
+                
                 if not success:
                     sys.exit(1)
                 
