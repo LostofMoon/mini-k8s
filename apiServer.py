@@ -5,7 +5,7 @@ from config import Config
 from etcd import Etcd
 from node import Node
 from pod import Pod
-from service import Service, service_manager
+from service import Service
 
 class ApiServer:
     def __init__(self):
@@ -375,178 +375,187 @@ class ApiServer:
             return jsonify({"error": str(e)}), 500
 
     # ==================== Service API Methods ====================
-    
-    def create_service(self, namespace, name):
+
+    def create_service(self, namespace: str, name: str):
         """创建Service"""
+        print(f"[INFO]Creating Service {name} in namespace: {namespace}")
+        
         try:
-            service_data = request.get_json()
+            service_data = request.json
             if not service_data:
-                return jsonify({"error": "No service data provided"}), 400
+                return jsonify({"error": "Service data is required"}), 400
             
-            # 确保metadata字段正确
-            if "metadata" not in service_data:
-                service_data["metadata"] = {}
-            service_data["metadata"]["name"] = name
-            service_data["metadata"]["namespace"] = namespace
+            # 检查Service是否已存在
+            existing_service = self.etcd.get(Config.SERVICE_SPEC_KEY.format(namespace=namespace, service_name=name))
+            if existing_service:
+                return jsonify({"error": f"Service {namespace}/{name} already exists"}), 409
             
-            # 创建Service对象
-            service = Service(service_data)
-            
-            # 分配ClusterIP
-            if service.service_type == "ClusterIP" or service.service_type == "NodePort":
-                service.allocate_cluster_ip()
-            
-            # 将Service添加到Service管理器
-            service_key_mgr = f"{service.namespace}/{service.name}"
-            service_manager.services[service_key_mgr] = service
-            
-            # 启动Service并同步端点
-            service_manager.sync_service_endpoints(service)
+            # 验证Service配置并创建Service实例
+            try:
+                service = Service(service_data)
+            except Exception as e:
+                return jsonify({"error": f"Invalid Service configuration: {e}"}), 400
             
             # 存储到etcd
-            service_key = Config.SERVICE_SPEC_KEY.format(namespace=namespace, service_name=name)
             service_dict = service.to_dict()
-            service_dict["creationTimestamp"] = time()
+            self.etcd.put(Config.SERVICE_SPEC_KEY.format(namespace=namespace, service_name=name), service_dict)
             
-            self.etcd.put(service_key, service_dict)
+            # 发送Service创建事件到Kafka（供ServiceController处理）
+            self._publish_service_event('CREATE', service_dict)
             
-            print(f"[INFO]Service {namespace}/{name} created successfully")
-            return jsonify(service_dict), 201
-            
-        except Exception as e:
-            print(f"[ERROR]Failed to create service: {e}")
-            import traceback
-            traceback.print_exc()
-            return jsonify({"error": str(e)}), 500
-    
-    def get_service(self, namespace, name):
-        """获取Service"""
-        try:
-            service_key = Config.SERVICE_SPEC_KEY.format(namespace=namespace, service_name=name)
-            result = self.etcd.get(service_key)
-            
-            if result:
-                # 从Service管理器获取最新状态
-                service = service_manager.get_service(namespace, name)
-                if service:
-                    service_dict = service.to_dict()
-                    return jsonify(service_dict)
-                else:
-                    return jsonify(result)
-            else:
-                return jsonify({"error": f"Service {namespace}/{name} not found"}), 404
-                
-        except Exception as e:
-            print(f"[ERROR]Failed to get service: {e}")
-            return jsonify({"error": str(e)}), 500
-    
-    def update_service(self, namespace, name):
-        """更新Service"""
-        try:
-            service_data = request.get_json()
-            if not service_data:
-                return jsonify({"error": "No service data provided"}), 400
-            
-            service_key = Config.SERVICE_SPEC_KEY.format(namespace=namespace, service_name=name)
-            existing_service = self.etcd.get(service_key)
-            
-            if not existing_service:
-                return jsonify({"error": f"Service {namespace}/{name} not found"}), 404
-            
-            # 更新Service
-            existing_service.update(service_data)
-            existing_service["lastUpdate"] = time()
-            
-            self.etcd.put(service_key, existing_service)
-            
-            # 更新Service管理器中的Service
-            service = service_manager.get_service(namespace, name)
-            if service:
-                service_manager.sync_service_endpoints(service)
-            
-            return jsonify(existing_service)
-            
-        except Exception as e:
-            print(f"[ERROR]Failed to update service: {e}")
-            return jsonify({"error": str(e)}), 500
-    
-    def delete_service(self, namespace, name):
-        """删除Service"""
-        try:
-            service_key = Config.SERVICE_SPEC_KEY.format(namespace=namespace, service_name=name)
-            existing_service = self.etcd.get(service_key)
-            
-            if not existing_service:
-                return jsonify({"error": f"Service {namespace}/{name} not found"}), 404
-            
-            # 从Service管理器删除
-            service_manager.delete_service(namespace, name)
-            
-            # 从etcd删除
-            self.etcd.delete(service_key)
-            
-            print(f"[INFO]Service {namespace}/{name} deleted successfully")
-            return jsonify({"message": f"Service {namespace}/{name} deleted"})
-            
-        except Exception as e:
-            print(f"[ERROR]Failed to delete service: {e}")
-            return jsonify({"error": str(e)}), 500
-    
-    def get_services_in_namespace(self, namespace):
-        """获取命名空间中的所有Service"""
-        try:
-            services = []
-            all_services = self.etcd.get_prefix(Config.GLOBAL_SERVICES_KEY)
-            
-            for service_data in all_services:
-                if service_data and service_data.get("metadata", {}).get("namespace") == namespace:
-                    # 获取最新状态
-                    service = service_manager.get_service(namespace, service_data["metadata"]["name"])
-                    if service:
-                        services.append(service.to_dict())
-                    else:
-                        services.append(service_data)
+            print(f"[INFO]Service {namespace}/{name} created successfully with ClusterIP {service.cluster_ip}")
             
             return jsonify({
-                "apiVersion": "v1",
-                "kind": "ServiceList",
-                "items": services
+                "message": f"Service {namespace}/{name} created successfully",
+                "service": service_dict
+            }), 201
+            
+        except Exception as e:
+            print(f"[ERROR]Failed to create Service {namespace}/{name}: {e}")
+            return jsonify({"error": f"Failed to create Service: {e}"}), 500
+
+    def get_service(self, namespace: str, name: str):
+        """获取Service信息"""
+        try:
+            service_data = self.etcd.get(Config.SERVICE_SPEC_KEY.format(namespace=namespace, service_name=name))
+            if not service_data:
+                return jsonify({"error": f"Service {namespace}/{name} not found"}), 404
+            
+            return jsonify(service_data)
+            
+        except Exception as e:
+            return jsonify({"error": f"Failed to get Service: {e}"}), 500
+
+    def update_service(self, namespace: str, name: str):
+        """更新Service"""
+        try:
+            existing_service = self.etcd.get(Config.SERVICE_SPEC_KEY.format(namespace=namespace, service_name=name))
+            if not existing_service:
+                return jsonify({"error": f"Service {namespace}/{name} not found"}), 404
+            
+            update_data = request.json
+            if not update_data:
+                return jsonify({"error": "Update data is required"}), 400
+            
+            # 合并更新数据
+            existing_service.update(update_data)
+            existing_service["lastUpdated"] = time()
+            
+            # 验证更新后的Service配置
+            try:
+                service = Service(existing_service)
+            except Exception as e:
+                return jsonify({"error": f"Invalid Service configuration: {e}"}), 400
+            
+            # 存储更新后的Service
+            service_dict = service.to_dict()
+            self.etcd.put(Config.SERVICE_SPEC_KEY.format(namespace=namespace, service_name=name), service_dict)
+            
+            # 发送Service更新事件
+            self._publish_service_event('UPDATE', service_dict)
+            
+            print(f"[INFO]Service {namespace}/{name} updated successfully")
+            
+            return jsonify({
+                "message": f"Service {namespace}/{name} updated successfully",
+                "service": service_dict
             })
             
         except Exception as e:
-            print(f"[ERROR]Failed to get services in namespace: {e}")
-            import traceback
-            traceback.print_exc()
-            return jsonify({"error": str(e)}), 500
-    
+            return jsonify({"error": f"Failed to update Service: {e}"}), 500
+
+    def delete_service(self, namespace: str, name: str):
+        """删除Service"""
+        try:
+            existing_service = self.etcd.get(Config.SERVICE_SPEC_KEY.format(namespace=namespace, service_name=name))
+            if not existing_service:
+                return jsonify({"error": f"Service {namespace}/{name} not found"}), 404
+            
+            # 发送Service删除事件
+            self._publish_service_event('DELETE', existing_service)
+            
+            # 从etcd删除
+            self.etcd.delete(Config.SERVICE_SPEC_KEY.format(namespace=namespace, service_name=name))
+            
+            print(f"[INFO]Service {namespace}/{name} deleted successfully")
+            
+            return jsonify({"message": f"Service {namespace}/{name} deleted successfully"})
+            
+        except Exception as e:
+            return jsonify({"error": f"Failed to delete Service: {e}"}), 500
+
+    def get_services_in_namespace(self, namespace: str):
+        """获取命名空间下的所有Service"""
+        try:
+            services = []
+            service_prefix = f"/services/{namespace}/"
+            
+            services_data = self.etcd.get_prefix(service_prefix)
+            
+            for service_data in services_data:
+                if isinstance(service_data, dict):
+                    services.append(service_data)
+            
+            return jsonify({
+                "items": services,
+                "metadata": {
+                    "namespace": namespace,
+                    "count": len(services)
+                }
+            })
+            
+        except Exception as e:
+            return jsonify({"error": f"Failed to get Services: {e}"}), 500
+
     def get_all_services(self):
         """获取所有Service"""
         try:
             services = []
-            all_services = self.etcd.get_prefix(Config.GLOBAL_SERVICES_KEY)
+            services_data = self.etcd.get_prefix(Config.GLOBAL_SERVICES_KEY)
             
-            for service_data in all_services:
-                if service_data:
-                    # 获取最新状态
-                    namespace = service_data.get("metadata", {}).get("namespace", "default")
-                    name = service_data.get("metadata", {}).get("name")
-                    service = service_manager.get_service(namespace, name)
-                    if service:
-                        services.append(service.to_dict())
-                    else:
-                        services.append(service_data)
+            for service_data in services_data:
+                if isinstance(service_data, dict):
+                    services.append(service_data)
             
             return jsonify({
-                "apiVersion": "v1",
-                "kind": "ServiceList", 
-                "items": services
+                "items": services,
+                "metadata": {
+                    "count": len(services)
+                }
             })
             
         except Exception as e:
-            print(f"[ERROR]Failed to get all services: {e}")
-            import traceback
-            traceback.print_exc()
-            return jsonify({"error": str(e)}), 500
+            return jsonify({"error": f"Failed to get all Services: {e}"}), 500
+
+    def _publish_service_event(self, event_type: str, service_data: dict):
+        """发布Service事件到Kafka"""
+        try:
+            from confluent_kafka import Producer
+            
+            producer_config = {
+                'bootstrap.servers': Config.KAFKA_BOOTSTRAP_SERVERS,
+                'client.id': 'apiserver'
+            }
+            
+            producer = Producer(producer_config)
+            
+            event = {
+                'type': event_type,  # CREATE, UPDATE, DELETE
+                'timestamp': time(),
+                'service': service_data
+            }
+            
+            # 发送到SERVICE_EVENTS_TOPIC
+            import json
+            event_json = json.dumps(event)
+            producer.produce('service-events', value=event_json)
+            producer.flush()
+            
+            print(f"[INFO]Published Service event: {event_type} {service_data.get('metadata', {}).get('namespace')}/{service_data.get('metadata', {}).get('name')}")
+            
+        except Exception as e:
+            print(f"[WARNING]Failed to publish Service event: {e}")
+
 
     def run(self):
         print('[INFO] ApiServer Run...')

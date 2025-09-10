@@ -11,15 +11,16 @@ python node.py --config testFile\node-1.yaml
 python node.py --config testFile\node-2.yaml
 python node.py --config testFile\node-3.yaml
 
-## 直接用PODs在当前注册3个Pods
-python pod.py --config testFile/pod-1.yaml --action create
+## 启动Service Controller
+conda activate k8s; python serviceController.py --daemon
+
+## 直接用PODs在当前注册3个Pods（删除有一定延迟）
+<!-- python pod.py --config testFile/pod-1.yaml --action create
 python pod.py --config testFile/pod-2.yaml --action create
 python pod.py --config testFile/pod-3.yaml --action create
 
 conda activate k8s; python submit_pod.py --config testFile/pod-1.yaml --wait
-conda activate k8s; python submit_pod.py --config testFile/pod-2.yaml --wait
-
-### NEW（删除是有一定延迟）
+conda activate k8s; python submit_pod.py --config testFile/pod-2.yaml --wait -->
 python kubectl.py get pods
 python kubectl.py apply -f testFile/pod-1.yaml
 python kubectl.py apply -f testFile/pod-2.yaml
@@ -55,4 +56,8 @@ docker compose -f docker-compose-kafka.yml up -d
 ### 2. 看有什么topic
 docker exec mini-k8s-kafka-1 kafka-topics.sh --list --bootstrap-server localhost:9092
 
-conda activate k8s; python service.py --action manager --sync-interval 5
+
+## 创建Services
+conda activate k8s; python kubectl.py apply -f testFile/service-clusterip.yaml
+
+conda activate k8s; python kubectl.py apply -f testFile/service-nodeport.yaml

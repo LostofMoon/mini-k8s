@@ -5,6 +5,7 @@ from uuid import uuid1
 
 from config import Config
 from kubelet import Kubelet
+from kubeproxy import KubeProxy
 
 class Node:
     def __init__(self, arg):
@@ -19,7 +20,7 @@ class Node:
 
         # 运行时状态
         self.kubelet = None
-        self.service_proxy = None # TODO: 组件引用（暂时为None，后续完善时再启用）
+        self.kube_proxy = None
         
     def run(self):
         """启动节点并注册到ApiServer"""
@@ -48,8 +49,14 @@ class Node:
             print(f"[ERROR]Failed to start Kubelet: {e}")
             self.kubelet = None
         
-        # TODO: 后续实现
-        # self._start_service_proxy()
+        # 创建并启动KubeProxy
+        try:
+            self.kube_proxy = KubeProxy(self.name, self.kafka_bootstrap_servers)
+            self.kube_proxy.start()
+            print(f"[INFO]KubeProxy started on node {self.name}")
+        except Exception as e:
+            print(f"[ERROR]Failed to start KubeProxy: {e}")
+            self.kube_proxy = None
         
         print(f"[INFO]Node {self.name} is running")
     
@@ -65,9 +72,13 @@ class Node:
             except Exception as e:
                 print(f"[ERROR]Failed to stop Kubelet: {e}")
         
-        # 停止Service Proxy (TODO: 后续实现)
-        # if self.service_proxy:
-        #     self.service_proxy.stop()
+        # 停止KubeProxy
+        if self.kube_proxy:
+            try:
+                self.kube_proxy.stop()
+                print(f"[INFO]KubeProxy stopped on node {self.name}")
+            except Exception as e:
+                print(f"[ERROR]Failed to stop KubeProxy: {e}")
         
         print(f"[INFO]Node {self.name} stopped")
 

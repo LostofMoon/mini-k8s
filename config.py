@@ -8,7 +8,11 @@ class Config:
     SERVER_URI = f"http://{HOST}:{SERVER_PORT}"
     KAFKA_PORT = "9092"
     KAFKA_BOOTSTRAP_SERVERS = f"{HOST}:{KAFKA_PORT}"
+
+    # Kubelet事件主题
     KUBELET_TOPIC = "kubelet-{node_name}"
+    # Service事件主题
+    SERVICE_EVENTS_TOPIC = "service-events"
 
 #---------------------------------------------------------------------------------------
 
